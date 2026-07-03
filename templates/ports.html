@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+
+{% block title %}Active Ports - Radxa Board{% endblock %}
+
+{% block page_title %}Network Ports{% endblock %}
+{% block page_desc %}Active sockets listening for inbound network connections.{% endblock %}
+
+{% block header_actions %}
+<div class="action-controls">
+    <select id="protocol-filter" class="form-select">
+        <option value="ALL">All Protocols</option>
+        <option value="TCP">TCP</option>
+        <option value="UDP">UDP</option>
+    </select>
+
+    <div class="search-wrapper">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="ports-search" placeholder="Search port/process..." autocomplete="off">
+    </div>
+    
+    <label class="toggle-switch">
+        <input type="checkbox" id="auto-refresh-ports" checked>
+        <span class="slider"></span>
+        <span class="toggle-label">Auto (5s)</span>
+    </label>
+
+    <button id="refresh-ports-btn" class="btn btn-secondary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-refresh">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        <span>Refresh</span>
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-card full-width">
+    <div class="card-header border-bottom">
+        <div class="header-left">
+            <h3>Active Ports</h3>
+            <span class="badge badge-primary" id="ports-count">0 Open</span>
+        </div>
+        <div id="ports-status-msg" class="status-indicator-text">Loading ports...</div>
+    </div>
+    
+    <div class="table-responsive">
+        <table class="data-table" id="ports-table">
+            <thead>
+                <tr>
+                    <th>Protocol</th>
+                    <th>State</th>
+                    <th>Local Address</th>
+                    <th>Port</th>
+                    <th>Process Name</th>
+                    <th>PID</th>
+                    <th style="text-align: right;">Action</th>
+                </tr>
+            </thead>
+            <tbody id="ports-list">
+                <tr class="placeholder-row">
+                    <td colspan="7">
+                        <div class="loader-spinner"></div>
+                        <span>Retrieving open network sockets...</span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+
+{% block title %}Application Logs - Radxa Board{% endblock %}
+
+{% block page_title %}Application Logs{% endblock %}
+{% block page_desc %}Live logs streaming directly from systemd services.{% endblock %}
+
+{% block header_actions %}
+<div class="action-controls">
+    <select id="logs-service-select" class="form-select">
+        <option value="dashboard" {% if selected_unit == 'dashboard' %}selected{% endif %}>dashboard</option>
+        <option value="flaskapp" {% if selected_unit == 'flaskapp' %}selected{% endif %}>flaskapp</option>
+    </select>
+
+    <select id="logs-limit-select" class="form-select" style="width: 110px;">
+        <option value="10">10 lines</option>
+        <option value="25">25 lines</option>
+        <option value="50" selected>50 lines</option>
+        <option value="100">100 lines</option>
+        <option value="250">250 lines</option>
+        <option value="500">500 lines</option>
+    </select>
+
+    <div class="search-wrapper">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="logs-search" placeholder="Search log lines..." autocomplete="off">
+    </div>
+    
+    <label class="toggle-switch">
+        <input type="checkbox" id="auto-refresh-logs" checked>
+        <span class="slider"></span>
+        <span class="toggle-label">Auto (3s)</span>
+    </label>
+
+    <button id="refresh-logs-btn" class="btn btn-secondary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-refresh">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        <span>Refresh</span>
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-card full-width" style="padding: 0; overflow: hidden; border-radius: 12px;" id="logs-container-root">
+    <div class="terminal-card">
+        <div class="terminal-header">
+            <div class="terminal-dots">
+                <span class="dot dot-red"></span>
+                <span class="dot dot-yellow"></span>
+                <span class="dot dot-green"></span>
+            </div>
+            <div class="terminal-title" id="terminal-title">dashboard.service - stdout/stderr logs</div>
+            <div class="terminal-stats" style="font-family: 'Rajdhani', sans-serif; font-size: 0.85rem; font-weight: 600; display: flex; gap: 12px; margin-left: auto; margin-right: 16px;">
+                <span style="color: var(--success-color);">200 OK: <span id="status-200-count">0</span></span>
+                <span style="color: var(--accent-amber);">404 WARN: <span id="status-404-count">0</span></span>
+                <span style="color: var(--error-color);">500 ERR: <span id="status-500-count">0</span></span>
+            </div>
+            <div class="terminal-actions">
+                <button id="copy-logs-btn" class="terminal-action-btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    <span>Copy</span>
+                </button>
+            </div>
+        </div>
+        <div class="terminal-body" id="logs-container" data-unit="{{ selected_unit }}">
+            <pre class="logs-content" id="logs-output">Loading application logs...</pre>
+        </div>
+    </div>
+</div>
+{% endblock %}

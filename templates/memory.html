@@ -1,0 +1,186 @@
+{% extends 'base.html' %}
+
+{% block title %}Memory Utilization - Radxa Board{% endblock %}
+
+{% block page_title %}Memory Utilization{% endblock %}
+{% block page_desc %}Real-time RAM and Swap memory utilization diagnostics.{% endblock %}
+
+{% block header_actions %}
+<div class="action-controls">
+    <label class="toggle-switch">
+        <input type="checkbox" id="auto-refresh-memory" checked>
+        <span class="slider"></span>
+        <span class="toggle-label">Auto (2s)</span>
+    </label>
+
+    <button id="refresh-memory-btn" class="btn btn-secondary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-refresh">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        <span>Refresh</span>
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="memory-grid">
+    <!-- RAM Utilization Card -->
+    <div class="dashboard-card memory-card">
+        <div class="card-header">
+            <h3>Random Access Memory (RAM)</h3>
+            <span class="card-subtitle">System physical memory allocations</span>
+        </div>
+        <div class="card-body gauge-container">
+            <div class="radial-gauge-wrapper">
+                <svg class="radial-gauge" viewBox="0 0 120 120">
+                    <circle class="gauge-bg" cx="60" cy="60" r="50"></circle>
+                    <circle id="ram-gauge-fill" class="gauge-fill ram-color" cx="60" cy="60" r="50" stroke-dasharray="314.159" stroke-dashoffset="314.159"></circle>
+                </svg>
+                <div class="gauge-overlay">
+                    <span id="ram-pct" class="gauge-value">0%</span>
+                    <span class="gauge-lbl">Used</span>
+                </div>
+            </div>
+            <div class="stats-details">
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator ram-total"></span>
+                        <span>Total Memory</span>
+                    </div>
+                    <div id="ram-total" class="stat-value">-- GB</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator ram-used"></span>
+                        <span>Used Memory</span>
+                    </div>
+                    <div id="ram-used" class="stat-value">-- GB</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator ram-free"></span>
+                        <span>Free Memory</span>
+                    </div>
+                    <div id="ram-free" class="stat-value">-- GB</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator ram-cached"></span>
+                        <span>Buffers / Cache</span>
+                    </div>
+                    <div id="ram-cached" class="stat-value">-- GB</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Swap Utilization Card -->
+    <div class="dashboard-card memory-card">
+        <div class="card-header">
+            <h3>Swap Space</h3>
+            <span class="card-subtitle">Secondary virtual memory on disk</span>
+        </div>
+        <div class="card-body gauge-container">
+            <div class="radial-gauge-wrapper">
+                <svg class="radial-gauge" viewBox="0 0 120 120">
+                    <circle class="gauge-bg" cx="60" cy="60" r="50"></circle>
+                    <circle id="swap-gauge-fill" class="gauge-fill swap-color" cx="60" cy="60" r="50" stroke-dasharray="314.159" stroke-dashoffset="314.159"></circle>
+                </svg>
+                <div class="gauge-overlay">
+                    <span id="swap-pct" class="gauge-value">0%</span>
+                    <span class="gauge-lbl">Used</span>
+                </div>
+            </div>
+            <div class="stats-details">
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator swap-total"></span>
+                        <span>Total Swap</span>
+                    </div>
+                    <div id="swap-total" class="stat-value">-- GB</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator swap-used"></span>
+                        <span>Used Swap</span>
+                    </div>
+                    <div id="swap-used" class="stat-value">-- GB</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator swap-free"></span>
+                        <span>Free Swap</span>
+                    </div>
+                    <div id="swap-free" class="stat-value">-- GB</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Service Memory Breakdown Card -->
+<div class="dashboard-card full-width" style="margin-top: 24px;">
+    <div class="card-header border-bottom">
+        <div class="header-left">
+            <h3>Service Memory Breakdown</h3>
+            <span class="card-subtitle">Active systemd services sorted by RAM usage</span>
+        </div>
+        <div class="status-indicator-text" id="memory-breakdown-count">0 services tracked</div>
+    </div>
+    <div class="table-responsive" style="margin-top: 15px;">
+        <table class="data-table" id="service-memory-table">
+            <thead>
+                <tr>
+                    <th style="width: 35%;">Service Name</th>
+                    <th style="width: 25%;">Memory Consumption</th>
+                    <th style="width: 40%;">Proportion of Total RAM</th>
+                </tr>
+            </thead>
+            <tbody id="service-memory-list">
+                <tr class="placeholder-row">
+                    <td colspan="3">
+                        <div class="loader-spinner"></div>
+                        <span>Calculating service footprint...</span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Process Memory Breakdown Card -->
+<div class="dashboard-card full-width" style="margin-top: 24px;">
+    <div class="card-header border-bottom">
+        <div class="header-left">
+            <h3>Process Memory Breakdown</h3>
+            <span class="card-subtitle">Top memory-consuming processes</span>
+        </div>
+        <div class="status-indicator-text" id="process-breakdown-count">0 processes tracked</div>
+    </div>
+    <div class="table-responsive" style="margin-top: 15px;">
+        <table class="data-table" id="process-memory-table">
+            <thead>
+                <tr>
+                    <th style="width: 15%;">PID</th>
+                    <th style="width: 35%;">Process Name</th>
+                    <th style="width: 20%;">Memory Consumption</th>
+                    <th style="width: 30%;">Proportion of Total RAM</th>
+                </tr>
+            </thead>
+            <tbody id="process-memory-list">
+                <tr class="placeholder-row">
+                    <td colspan="4">
+                        <div class="loader-spinner"></div>
+                        <span>Calculating process footprint...</span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+
+
