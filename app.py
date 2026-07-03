@@ -6,7 +6,6 @@ from flask import Flask, request, jsonify, render_template, redirect
 
 app = Flask(__name__)
 
-# Configurable default password for sudo operations, defaults to 'viswa'
 DEFAULT_SUDO_PASSWORD = os.environ.get('DASHBOARD_SUDO_PASSWORD', 'viswa')
 
 import logging

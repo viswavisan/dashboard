@@ -52,28 +52,28 @@ async function authenticatedFetch(url, options = {}) {
     if (!options.headers) {
         options.headers = {};
     }
-    
-    // Retrieve sudo password from sessionStorage or default to 'viswa'
-    const savedPassword = sessionStorage.getItem('sudo_password') || 'viswa';
+
+    // Retrieve sudo password from sessionStorage
+    const savedPassword = sessionStorage.getItem('sudo_password');
     options.headers['X-Sudo-Password'] = savedPassword;
-    
+
     let response = await fetch(url, options);
-    
+
     if (response.status === 401) {
         // Clear cached wrong password
         sessionStorage.removeItem('sudo_password');
-        
+
         // Prompt user
-        const newPassword = prompt("Sudo password authorization required (default: viswa):");
+        const newPassword = prompt("Sudo password authorization required:");
         if (newPassword !== null) {
-            const passwordToUse = newPassword.trim() || 'viswa';
+            const passwordToUse = newPassword.trim();
             sessionStorage.setItem('sudo_password', passwordToUse);
             options.headers['X-Sudo-Password'] = passwordToUse;
             // Retry the fetch
             response = await fetch(url, options);
         }
     }
-    
+
     return response;
 }
 
