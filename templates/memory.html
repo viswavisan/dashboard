@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 
-{% block title %}Memory Utilization - Radxa Board{% endblock %}
+{% block title %}Memory - System Dashboard{% endblock %}
 
 {% block page_title %}Memory Utilization{% endblock %}
 {% block page_desc %}Real-time RAM and Swap memory utilization diagnostics.{% endblock %}
@@ -8,13 +8,14 @@
 {% block header_actions %}
 <div class="action-controls">
     <label class="toggle-switch">
-        <input type="checkbox" id="auto-refresh-memory" checked>
+        <input type="checkbox" id="auto-refresh-memory">
         <span class="slider"></span>
-        <span class="toggle-label">Auto (2s)</span>
+        <span class="toggle-label">Auto (2m)</span>
     </label>
 
     <button id="refresh-memory-btn" class="btn btn-secondary">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-refresh">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" class="icon-refresh">
             <polyline points="23 4 23 10 17 10"></polyline>
             <polyline points="1 20 1 14 7 14"></polyline>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
@@ -25,7 +26,182 @@
 {% endblock %}
 
 {% block content %}
-<div class="memory-grid">
+<!-- System Vitals Banner: Public IP, Hostname, Uptime, Load Average -->
+<div class="system-vitals-banner dashboard-card">
+    <div class="vital-item">
+        <div class="vital-icon-box cyan">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+        </div>
+        <div class="vital-text">
+            <span class="vital-title">PUBLIC IP</span>
+            <div class="vital-val-group">
+                <span id="vital-ip" class="vital-value font-mono">{{ system_ip }}</span>
+                <button class="btn-copy-mini" onclick="copyToClipboard('{{ system_ip }}')" title="Copy Public IP">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="vital-divider"></div>
+
+    <div class="vital-item">
+        <div class="vital-icon-box amber">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+        </div>
+        <div class="vital-text">
+            <span class="vital-title">SYSTEM UPTIME</span>
+            <span id="vital-uptime" class="vital-value">Calculating...</span>
+        </div>
+    </div>
+
+    <div class="vital-divider"></div>
+
+    <div class="vital-item">
+        <div class="vital-icon-box purple">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="20" x2="18" y2="10"></line>
+                <line x1="12" y1="20" x2="12" y2="4"></line>
+                <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+        </div>
+        <div class="vital-text">
+            <span class="vital-title">LOAD AVERAGE (1m / 5m / 15m)</span>
+            <span id="vital-loadavg" class="vital-value font-mono">0.00, 0.00, 0.00</span>
+        </div>
+    </div>
+
+    <div class="vital-divider"></div>
+
+    <div class="vital-item">
+        <div class="vital-icon-box emerald">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            </svg>
+        </div>
+        <div class="vital-text">
+            <span class="vital-title">REMOTE HOST</span>
+            <span id="vital-hostname" class="vital-value">{{ system_hostname }}</span>
+        </div>
+    </div>
+</div>
+
+<div class="memory-grid" style="margin-top: 24px;">
+    <!-- CPU Utilization Card -->
+    <div class="dashboard-card memory-card">
+        <div class="card-header">
+            <h3>Processor (CPU)</h3>
+            <span class="card-subtitle">Real-time compute utilization</span>
+        </div>
+        <div class="card-body gauge-container">
+            <div class="radial-gauge-wrapper">
+                <svg class="radial-gauge" viewBox="0 0 120 120">
+                    <circle class="gauge-bg" cx="60" cy="60" r="50"></circle>
+                    <circle id="cpu-gauge-fill" class="gauge-fill cpu-color" cx="60" cy="60" r="50"
+                        stroke-dasharray="314.159" stroke-dashoffset="314.159"></circle>
+                </svg>
+                <div class="gauge-overlay">
+                    <span id="cpu-pct" class="gauge-value">0%</span>
+                    <span class="gauge-lbl">Utilized</span>
+                </div>
+            </div>
+            <div class="stats-details">
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator cpu-cores"></span>
+                        <span>CPU Cores</span>
+                    </div>
+                    <div id="cpu-cores" class="stat-value">-- Cores</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator cpu-load1"></span>
+                        <span>Load (1 min)</span>
+                    </div>
+                    <div id="cpu-load1" class="stat-value">--</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator cpu-load5"></span>
+                        <span>Load (5 min)</span>
+                    </div>
+                    <div id="cpu-load5" class="stat-value">--</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator cpu-load15"></span>
+                        <span>Load (15 min)</span>
+                    </div>
+                    <div id="cpu-load15" class="stat-value">--</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Storage (Disk /) Card -->
+    <div class="dashboard-card memory-card">
+        <div class="card-header">
+            <h3>Storage (Disk /)</h3>
+            <span class="card-subtitle">Root filesystem space</span>
+        </div>
+        <div class="card-body gauge-container">
+            <div class="radial-gauge-wrapper">
+                <svg class="radial-gauge" viewBox="0 0 120 120">
+                    <circle class="gauge-bg" cx="60" cy="60" r="50"></circle>
+                    <circle id="disk-gauge-fill" class="gauge-fill disk-color" cx="60" cy="60" r="50"
+                        stroke-dasharray="314.159" stroke-dashoffset="314.159"></circle>
+                </svg>
+                <div class="gauge-overlay">
+                    <span id="disk-pct" class="gauge-value">0%</span>
+                    <span class="gauge-lbl">Used</span>
+                </div>
+            </div>
+            <div class="stats-details">
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator disk-total"></span>
+                        <span>Total Space</span>
+                    </div>
+                    <div id="disk-total" class="stat-value">-- GB</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator disk-used"></span>
+                        <span>Used Space</span>
+                    </div>
+                    <div id="disk-used" class="stat-value">-- GB</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator disk-free"></span>
+                        <span>Available Space</span>
+                    </div>
+                    <div id="disk-free" class="stat-value">-- GB</div>
+                </div>
+                <div class="stat-row">
+                    <div class="stat-label">
+                        <span class="stat-color-indicator disk-mount"></span>
+                        <span>Mount Point</span>
+                    </div>
+                    <div id="disk-mount" class="stat-value font-mono">/</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- RAM Utilization Card -->
     <div class="dashboard-card memory-card">
         <div class="card-header">
@@ -36,7 +212,8 @@
             <div class="radial-gauge-wrapper">
                 <svg class="radial-gauge" viewBox="0 0 120 120">
                     <circle class="gauge-bg" cx="60" cy="60" r="50"></circle>
-                    <circle id="ram-gauge-fill" class="gauge-fill ram-color" cx="60" cy="60" r="50" stroke-dasharray="314.159" stroke-dashoffset="314.159"></circle>
+                    <circle id="ram-gauge-fill" class="gauge-fill ram-color" cx="60" cy="60" r="50"
+                        stroke-dasharray="314.159" stroke-dashoffset="314.159"></circle>
                 </svg>
                 <div class="gauge-overlay">
                     <span id="ram-pct" class="gauge-value">0%</span>
@@ -86,7 +263,8 @@
             <div class="radial-gauge-wrapper">
                 <svg class="radial-gauge" viewBox="0 0 120 120">
                     <circle class="gauge-bg" cx="60" cy="60" r="50"></circle>
-                    <circle id="swap-gauge-fill" class="gauge-fill swap-color" cx="60" cy="60" r="50" stroke-dasharray="314.159" stroke-dashoffset="314.159"></circle>
+                    <circle id="swap-gauge-fill" class="gauge-fill swap-color" cx="60" cy="60" r="50"
+                        stroke-dasharray="314.159" stroke-dashoffset="314.159"></circle>
                 </svg>
                 <div class="gauge-overlay">
                     <span id="swap-pct" class="gauge-value">0%</span>
@@ -181,6 +359,3 @@
     </div>
 </div>
 {% endblock %}
-
-
-

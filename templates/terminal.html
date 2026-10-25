@@ -1,0 +1,540 @@
+{% extends 'base.html' %}
+
+{% block title %}Terminal - System Dashboard{% endblock %}
+
+{% block page_title %}Terminal Console{% endblock %}
+{% block page_desc %}Cockpit-style interactive command-line shell on remote host.{% endblock %}
+
+{% block header_actions %}
+<div class="action-controls" style="flex-wrap: wrap; gap: 8px;">
+    <!-- Sudo Toggle -->
+    <label class="toggle-switch" title="Execute commands with sudo privileges">
+        <input type="checkbox" id="terminal-sudo-toggle">
+        <span class="slider"></span>
+        <span class="toggle-label" style="color: var(--warning-color); font-weight: 600;">Sudo Mode</span>
+    </label>
+
+    <!-- Clear Button -->
+    <button id="terminal-clear-btn" class="btn btn-secondary" title="Clear terminal screen (Ctrl+L)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+        <span>Clear</span>
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="terminal-container">
+    <!-- Quick Command Shortcuts Bar -->
+    <div class="quick-commands-bar">
+        <span class="quick-label">Quick Snippets:</span>
+        <button type="button" class="btn-snippet" data-cmd="uname -a">uname -a</button>
+        <button type="button" class="btn-snippet" data-cmd="df -h">df -h</button>
+        <button type="button" class="btn-snippet" data-cmd="free -h">free -h</button>
+        <button type="button" class="btn-snippet" data-cmd="uptime">uptime</button>
+        <button type="button" class="btn-snippet" data-cmd="ip -br a">ip -br a</button>
+        <button type="button" class="btn-snippet" data-cmd="systemctl --failed">systemctl --failed</button>
+        <button type="button" class="btn-snippet" data-cmd="docker ps 2>/dev/null || podman ps 2>/dev/null || echo 'No container runtime'">containers</button>
+    </div>
+
+    <!-- Cockpit Terminal Card Window -->
+    <div class="terminal-window" id="terminal-window">
+        <!-- Terminal Window Title Bar -->
+        <div class="terminal-titlebar">
+            <div class="window-dots">
+                <span class="dot dot-red"></span>
+                <span class="dot dot-yellow"></span>
+                <span class="dot dot-green"></span>
+            </div>
+            <div class="window-title" id="terminal-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-cyan);">
+                    <polyline points="4 17 10 11 4 5"></polyline>
+                    <line x1="12" y1="19" x2="20" y2="19"></line>
+                </svg>
+                <span id="window-user-host">{{ terminal_user }}@{{ system_hostname }}</span>
+                <span class="window-shell-type">(bash)</span>
+            </div>
+            <div class="window-status">
+                <span class="status-indicator-dot online" style="width: 7px; height: 7px;"></span>
+                <span style="font-size: 0.72rem; color: var(--text-muted); font-family: monospace;">SSH</span>
+            </div>
+        </div>
+
+        <!-- Terminal Output Buffer -->
+        <div class="terminal-screen" id="terminal-screen">
+            <!-- Welcome Banner -->
+            <div class="terminal-banner">
+                <div class="banner-title">Antigravity Cockpit Terminal — Connected via SSH</div>
+                <div class="banner-sub">Target Host: <span style="color: var(--accent-cyan);">{{ system_ip }}</span> ({{ system_hostname }}) | User: <span style="color: var(--accent-purple);">{{ terminal_user }}</span></div>
+                <div class="banner-hint">Type any bash command and press Enter. Navigate history with Up/Down arrows. Use 'clear' or Ctrl+L to wipe buffer.</div>
+            </div>
+
+            <!-- Command Output History Elements appended dynamically -->
+            <div id="terminal-history"></div>
+
+            <!-- Active Prompt & Input Line -->
+            <div class="terminal-active-line" id="terminal-active-line">
+                <span class="terminal-prompt" id="terminal-prompt">
+                    <span class="prompt-user">{{ terminal_user }}</span><span class="prompt-at">@</span><span class="prompt-host">{{ system_hostname }}</span>:<span class="prompt-cwd" id="prompt-cwd">~</span><span class="prompt-sign">$</span>
+                </span>
+                <div class="terminal-input-wrapper">
+                    <input type="text" id="terminal-input" class="terminal-input" autocomplete="off" autocorrect="off"
+                        autocapitalize="off" spellcheck="false" autofocus>
+                    <div id="terminal-spinner" class="terminal-spinner" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    .terminal-container {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        height: calc(100vh - 180px);
+        min-height: 520px;
+    }
+
+    .quick-commands-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+    }
+
+    .quick-label {
+        font-size: 0.76rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .btn-snippet {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--panel-border);
+        border-radius: 6px;
+        color: var(--text-main);
+        padding: 4px 10px;
+        font-size: 0.76rem;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+    }
+
+    .btn-snippet:hover {
+        background: rgba(0, 240, 255, 0.12);
+        border-color: var(--accent-cyan);
+        color: #fff;
+        transform: translateY(-1px);
+    }
+
+    .terminal-window {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: #090d16;
+        border: 1px solid rgba(0, 240, 255, 0.22);
+        border-radius: 12px;
+        box-shadow: 0 15px 40px rgba(0, 0, 0, 0.6), 0 0 25px rgba(0, 240, 255, 0.05);
+        overflow: hidden;
+    }
+
+    .terminal-titlebar {
+        background: rgba(18, 24, 38, 0.95);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 9px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        user-select: none;
+    }
+
+    .window-dots {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 60px;
+    }
+
+    .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+    }
+
+    .dot-red { background: #ef4444; }
+    .dot-yellow { background: #f59e0b; }
+    .dot-green { background: #10b981; }
+
+    .window-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: 'Outfit', sans-serif;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #fff;
+        letter-spacing: 0.5px;
+    }
+
+    .window-shell-type {
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        font-weight: normal;
+    }
+
+    .window-status {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 60px;
+        justify-content: flex-end;
+    }
+
+    .terminal-screen {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 20px;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 0.9rem;
+        line-height: 1.5;
+        color: #e2e8f0;
+        cursor: text;
+        background: radial-gradient(at 0% 0%, rgba(0, 240, 255, 0.02) 0px, transparent 40%), #090d16;
+    }
+
+    .terminal-banner {
+        padding-bottom: 14px;
+        margin-bottom: 14px;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+        color: var(--text-muted);
+        font-size: 0.82rem;
+    }
+
+    .banner-title {
+        font-weight: 700;
+        color: #fff;
+        font-size: 0.88rem;
+        margin-bottom: 2px;
+    }
+
+    .banner-sub {
+        margin-bottom: 4px;
+    }
+
+    .banner-hint {
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 0.75rem;
+    }
+
+    .terminal-command-entry {
+        margin-bottom: 12px;
+        animation: fadeIn 0.15s ease-out;
+    }
+
+    .entry-prompt-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+    }
+
+    .entry-command-text {
+        color: #fff;
+        font-weight: 700;
+    }
+
+    .entry-status-badge {
+        font-size: 0.68rem;
+        padding: 1px 6px;
+        border-radius: 4px;
+        margin-left: auto;
+        font-family: 'Outfit', sans-serif;
+        font-weight: 600;
+    }
+
+    .entry-status-badge.success {
+        background: rgba(16, 185, 129, 0.15);
+        color: #6ee7b7;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .entry-status-badge.error {
+        background: rgba(239, 68, 68, 0.15);
+        color: #fca5a5;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .entry-output {
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-top: 4px;
+        padding-left: 2px;
+        color: #cbd5e1;
+    }
+
+    .entry-output.stderr-text {
+        color: #fca5a5;
+    }
+
+    .terminal-active-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+    }
+
+    .terminal-prompt {
+        font-weight: 600;
+        white-space: nowrap;
+        user-select: none;
+    }
+
+    .prompt-user { color: var(--accent-cyan); }
+    .prompt-at { color: var(--text-muted); }
+    .prompt-host { color: var(--accent-purple); }
+    .prompt-cwd { color: #fbbf24; margin: 0 2px; }
+    .prompt-sign { color: #fff; }
+
+    .terminal-input-wrapper {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        position: relative;
+    }
+
+    .terminal-input {
+        width: 100%;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: #fff;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 0.92rem;
+        padding: 0;
+        margin: 0;
+        caret-color: var(--accent-cyan);
+    }
+
+    .terminal-spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(0, 240, 255, 0.2);
+        border-top-color: var(--accent-cyan);
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        position: absolute;
+        right: 0;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    (function () {
+        const terminalScreen = document.getElementById('terminal-screen');
+        const terminalHistory = document.getElementById('terminal-history');
+        const terminalInput = document.getElementById('terminal-input');
+        const terminalPrompt = document.getElementById('terminal-prompt');
+        const promptCwd = document.getElementById('prompt-cwd');
+        const terminalSpinner = document.getElementById('terminal-spinner');
+        const sudoToggle = document.getElementById('terminal-sudo-toggle');
+        const clearBtn = document.getElementById('terminal-clear-btn');
+        const snippetButtons = document.querySelectorAll('.btn-snippet');
+
+        let currentCwd = '~';
+        let commandHistory = [];
+        let historyIndex = -1;
+        let isRunning = false;
+
+        // Keep input focused when clicking anywhere in the terminal screen
+        terminalScreen.addEventListener('click', (e) => {
+            // Only focus if user is not selecting text
+            if (window.getSelection().toString().length === 0) {
+                terminalInput.focus();
+            }
+        });
+
+        // Snippet buttons click
+        snippetButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const cmd = btn.getAttribute('data-cmd');
+                if (cmd && !isRunning) {
+                    terminalInput.value = cmd;
+                    executeCommand(cmd);
+                }
+            });
+        });
+
+        // Clear terminal
+        function clearTerminal() {
+            terminalHistory.innerHTML = '';
+            terminalInput.value = '';
+            terminalInput.focus();
+        }
+
+        clearBtn.addEventListener('click', clearTerminal);
+
+        // Keyboard events on input
+        terminalInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const cmd = terminalInput.value.trim();
+                if (cmd) {
+                    commandHistory.push(cmd);
+                    historyIndex = commandHistory.length;
+                    executeCommand(cmd);
+                }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (commandHistory.length > 0 && historyIndex > 0) {
+                    historyIndex--;
+                    terminalInput.value = commandHistory[historyIndex];
+                }
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    terminalInput.value = commandHistory[historyIndex];
+                } else {
+                    historyIndex = commandHistory.length;
+                    terminalInput.value = '';
+                }
+            } else if (e.key === 'l' && e.ctrlKey) {
+                e.preventDefault();
+                clearTerminal();
+            } else if (e.key === 'c' && e.ctrlKey) {
+                e.preventDefault();
+                terminalInput.value = '';
+            }
+        });
+
+        async function executeCommand(cmd) {
+            if (isRunning) return;
+
+            // Handle client-side clear
+            if (cmd === 'clear') {
+                clearTerminal();
+                return;
+            }
+
+            isRunning = true;
+            terminalInput.disabled = true;
+            terminalSpinner.style.display = 'block';
+
+            const useSudo = sudoToggle ? sudoToggle.checked : false;
+            const promptSnapshot = terminalPrompt.cloneNode(true);
+
+            // Create command entry element
+            const entry = document.createElement('div');
+            entry.className = 'terminal-command-entry';
+
+            const promptLine = document.createElement('div');
+            promptLine.className = 'entry-prompt-line';
+            promptLine.appendChild(promptSnapshot);
+
+            const cmdSpan = document.createElement('span');
+            cmdSpan.className = 'entry-command-text';
+            cmdSpan.textContent = cmd;
+            promptLine.appendChild(cmdSpan);
+
+            entry.appendChild(promptLine);
+
+            const outputEl = document.createElement('div');
+            outputEl.className = 'entry-output';
+            outputEl.textContent = 'Running...';
+            entry.appendChild(outputEl);
+
+            terminalHistory.appendChild(entry);
+            terminalInput.value = '';
+            scrollToBottom();
+
+            try {
+                const res = await fetch('/api/terminal/exec', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        command: cmd,
+                        cwd: currentCwd,
+                        sudo: useSudo
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.clear) {
+                    clearTerminal();
+                    return;
+                }
+
+                // Update CWD if changed
+                if (data.cwd) {
+                    currentCwd = data.cwd;
+                    // Format CWD cleanly (replace /home/user with ~)
+                    let displayCwd = data.cwd;
+                    if (displayCwd.startsWith('/home/')) {
+                        const parts = displayCwd.split('/');
+                        if (parts.length >= 3) {
+                            displayCwd = '~' + displayCwd.slice(('/home/' + parts[2]).length);
+                            if (!displayCwd) displayCwd = '~';
+                        }
+                    }
+                    promptCwd.textContent = displayCwd;
+                }
+
+                // Add status badge
+                const badge = document.createElement('span');
+                badge.className = `entry-status-badge ${data.code === 0 ? 'success' : 'error'}`;
+                badge.textContent = data.code === 0 ? 'exit 0' : `exit ${data.code}`;
+                promptLine.appendChild(badge);
+
+                // Format output
+                let content = '';
+                if (data.stdout) content += data.stdout;
+                if (data.stderr) {
+                    if (content) content += '\n';
+                    content += data.stderr;
+                }
+
+                outputEl.textContent = content || '';
+                if (data.code !== 0 && !data.stdout) {
+                    outputEl.classList.add('stderr-text');
+                }
+
+            } catch (err) {
+                outputEl.textContent = `Execution failed: ${err.message}`;
+                outputEl.classList.add('stderr-text');
+            } finally {
+                isRunning = false;
+                terminalInput.disabled = false;
+                terminalSpinner.style.display = 'none';
+                terminalInput.focus();
+                scrollToBottom();
+            }
+        }
+
+        function scrollToBottom() {
+            terminalScreen.scrollTop = terminalScreen.scrollHeight;
+        }
+
+        // Initialize focus
+        terminalInput.focus();
+    })();
+</script>
+{% endblock %}

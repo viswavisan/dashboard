@@ -1,0 +1,159 @@
+{% extends 'base.html' %}
+
+{% block title %}Server List - System Dashboard{% endblock %}
+
+{% block page_title %}Server Fleet & Saved Sessions{% endblock %}
+{% block page_desc %}Manage remote servers, view connection profiles, and instantly switch hosts.{% endblock %}
+
+{% block header_actions %}
+<div class="action-controls">
+    <button id="btn-add-server" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span>Add Server</span>
+    </button>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Active Server Status Banner -->
+<div class="active-server-card dashboard-card">
+    <div class="active-server-header">
+        <div class="active-badge-wrapper">
+            <span class="active-pulse-dot"></span>
+            <span class="active-badge-text">CONNECTED HOST</span>
+        </div>
+        <div class="active-actions">
+            <a href="/terminal" class="btn btn-secondary btn-sm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="4 17 10 11 4 5"></polyline>
+                    <line x1="12" y1="19" x2="20" y2="19"></line>
+                </svg>
+                <span>Terminal</span>
+            </a>
+            <a href="/memory" class="btn btn-secondary btn-sm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                    <rect x="9" y="9" width="6" height="6"></rect>
+                </svg>
+                <span>Vitals</span>
+            </a>
+            <a href="/logout" class="btn btn-danger-ghost btn-sm" title="Disconnect and return to login">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                    <polyline points="16 17 21 12 16 7"></polyline>
+                    <line x1="21" y1="12" x2="9" y2="12"></line>
+                </svg>
+                <span>Disconnect</span>
+            </a>
+        </div>
+    </div>
+
+    <div class="active-server-body">
+        <div class="active-meta-item">
+            <span class="meta-label">Public IP</span>
+            <div class="ip-copy-group">
+                <span id="active-host-ip" class="meta-value-highlight">{{ system_ip }}</span>
+                <button class="btn-copy-mini" onclick="copyToClipboard('{{ system_ip }}')" title="Copy IP">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="active-meta-item">
+            <span class="meta-label">Hostname</span>
+            <span id="active-host-name" class="meta-value">{{ system_hostname }}</span>
+        </div>
+
+        <div class="active-meta-item">
+            <span class="meta-label">User & Port</span>
+            <span class="meta-value font-mono">{{ system_user }}@{{ system_ip }}:22</span>
+        </div>
+
+        <div class="active-meta-item">
+            <span class="meta-label">Session Status</span>
+            <span class="status-pill status-online">Active Session</span>
+        </div>
+    </div>
+</div>
+
+<!-- Saved Servers Grid Section -->
+<div class="saved-servers-section" style="margin-top: 32px;">
+    <div class="section-toolbar">
+        <div class="toolbar-left">
+            <h3 class="section-heading">Saved Remote Servers</h3>
+            <span id="saved-server-count" class="badge-count">0 saved</span>
+        </div>
+        <div class="toolbar-right">
+            <div class="search-box">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="server-search" placeholder="Filter servers by name or IP...">
+            </div>
+        </div>
+    </div>
+
+    <!-- Servers Grid Container -->
+    <div id="servers-grid" class="servers-grid" style="margin-top: 16px;">
+        <!-- Populated via JavaScript from localStorage -->
+    </div>
+</div>
+
+<!-- Modal Dialog for Add / Edit Server Profile -->
+<div id="server-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3 id="modal-title">Add Remote Server</h3>
+            <button type="button" id="btn-close-modal" class="modal-close-btn">&times;</button>
+        </div>
+        <form id="server-form" class="modal-form">
+            <input type="hidden" id="edit-orig-name" value="">
+
+            <div class="form-group">
+                <label for="server-name">Profile / Server Name</label>
+                <input type="text" id="server-name" placeholder="e.g. OCI Ampere VM" required>
+            </div>
+
+            <div class="form-row-2col">
+                <div class="form-group">
+                    <label for="server-host">Host / Public IP</label>
+                    <input type="text" id="server-host" placeholder="e.g. 140.245.221.138" required>
+                </div>
+                <div class="form-group">
+                    <label for="server-port">SSH Port</label>
+                    <input type="number" id="server-port" value="22" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="server-user">SSH Username</label>
+                <input type="text" id="server-user" value="opc" required>
+            </div>
+
+            <div class="form-group">
+                <label for="server-key">Private Key Path</label>
+                <input type="text" id="server-key" placeholder="e.g. C:\Users\viswa\.ssh\ssh.key" required>
+            </div>
+
+            <div class="form-group">
+                <label for="server-sudo">Sudo Password (Optional)</label>
+                <input type="password" id="server-sudo" placeholder="Optional sudo authorization">
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" id="btn-cancel-modal" class="btn btn-secondary">Cancel</button>
+                <button type="submit" id="btn-save-modal" class="btn btn-primary">Save Profile</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="server-toast" class="toast"></div>
+{% endblock %}

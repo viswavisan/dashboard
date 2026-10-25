@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH Connection - System Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap"
+        rel="stylesheet">
+    <!-- Styled stylesheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .login-page {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: var(--bg-color);
+            background-image:
+                radial-gradient(at 15% 15%, rgba(139, 92, 246, 0.12) 0px, transparent 50%),
+                radial-gradient(at 85% 85%, rgba(0, 240, 255, 0.12) 0px, transparent 50%);
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 480px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--panel-border);
+            border-radius: 18px;
+            padding: 30px 28px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.55), 0 0 30px rgba(0, 240, 255, 0.05);
+            animation: fadeIn 0.3s ease-out;
+            position: relative;
+        }
+
+        .login-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .login-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .login-logo {
+            width: 42px;
+            height: 42px;
+            background: rgba(0, 240, 255, 0.08);
+            border: 1px solid rgba(0, 240, 255, 0.28);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--accent-cyan);
+            box-shadow: 0 0 14px rgba(0, 240, 255, 0.15);
+        }
+
+        .login-title-group h1 {
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.8px;
+            margin: 0;
+            line-height: 1.2;
+        }
+
+        .login-title-group p {
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            margin: 2px 0 0 0;
+        }
+
+        /* Profile Bar (Dropdown + Action Buttons) */
+        .session-bar {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(0, 240, 255, 0.2);
+            border-radius: 10px;
+            padding: 10px 12px;
+            margin-bottom: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .session-bar-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .session-bar-label {
+            font-size: 0.76rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .session-controls-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .session-dropdown-wrapper {
+            position: relative;
+            flex: 1;
+        }
+
+        .session-dropdown {
+            width: 100%;
+            background: rgba(18, 24, 38, 0.95);
+            border: 1px solid var(--panel-border);
+            border-radius: 8px;
+            color: #fff;
+            padding: 8px 30px 8px 12px;
+            font-size: 0.88rem;
+            font-family: 'Outfit', sans-serif;
+            appearance: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+            box-sizing: border-box;
+            transition: all 0.2s ease;
+        }
+
+        .session-dropdown:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 10px rgba(0, 240, 255, 0.2);
+        }
+
+        .session-dropdown-icon {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            color: var(--text-muted);
+        }
+
+        .btn-icon-action {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--panel-border);
+            color: var(--text-muted);
+            padding: 8px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-family: 'Rajdhani', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+
+        .btn-icon-action:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-icon-save:hover {
+            color: #10b981;
+            border-color: rgba(16, 185, 129, 0.4);
+            background: rgba(16, 185, 129, 0.15);
+        }
+
+        .btn-icon-danger:hover {
+            color: #ef4444;
+            border-color: rgba(239, 68, 68, 0.4);
+            background: rgba(239, 68, 68, 0.15);
+        }
+
+        /* Form Layout */
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 12px;
+        }
+
+        .form-group label {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+
+        .input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .input-icon {
+            position: absolute;
+            left: 12px;
+            color: var(--text-muted);
+            pointer-events: none;
+        }
+
+        .login-form input[type="text"],
+        .login-form input[type="number"],
+        .login-form input[type="password"] {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--panel-border);
+            border-radius: 9px;
+            color: #fff;
+            padding: 10px 14px 10px 38px;
+            font-size: 0.92rem;
+            font-family: 'Outfit', sans-serif;
+            transition: all 0.2s ease;
+            box-sizing: border-box;
+        }
+
+        .login-form input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 12px rgba(0, 240, 255, 0.25);
+            background: rgba(0, 0, 0, 0.45);
+        }
+
+        .btn-connect {
+            background: linear-gradient(135deg, rgba(0, 240, 255, 0.3), rgba(139, 92, 246, 0.3));
+            border: 1px solid var(--accent-cyan);
+            color: #fff;
+            padding: 12px;
+            font-size: 1.05rem;
+            font-family: 'Rajdhani', sans-serif;
+            font-weight: 700;
+            letter-spacing: 1px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            box-shadow: 0 0 16px rgba(0, 240, 255, 0.18);
+            margin-top: 4px;
+        }
+
+        .btn-connect:hover {
+            background: linear-gradient(135deg, rgba(0, 240, 255, 0.45), rgba(139, 92, 246, 0.45));
+            box-shadow: 0 0 24px rgba(0, 240, 255, 0.35);
+            transform: translateY(-1px);
+        }
+
+        .btn-connect:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .error-banner {
+            display: none;
+            background: rgba(239, 68, 68, 0.14);
+            border: 1px solid rgba(239, 68, 68, 0.38);
+            border-radius: 9px;
+            padding: 10px 14px;
+            color: #fca5a5;
+            font-size: 0.85rem;
+            line-height: 1.4;
+            margin-bottom: 14px;
+            animation: fadeIn 0.2s ease;
+        }
+
+        /* Sleek Popup Modal for Save Session */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            animation: fadeIn 0.15s ease;
+        }
+
+        .modal-box {
+            background: rgba(18, 24, 38, 0.95);
+            border: 1px solid var(--accent-cyan);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7), 0 0 25px rgba(0, 240, 255, 0.15);
+            border-radius: 14px;
+            padding: 22px 24px;
+            width: 100%;
+            max-width: 380px;
+        }
+
+        .modal-box h3 {
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 1.25rem;
+            margin: 0 0 6px 0;
+            color: #fff;
+        }
+
+        .modal-box p {
+            font-size: 0.84rem;
+            color: var(--text-muted);
+            margin: 0 0 16px 0;
+        }
+
+        .modal-input {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--panel-border);
+            border-radius: 8px;
+            color: #fff;
+            padding: 10px 12px;
+            font-size: 0.92rem;
+            font-family: 'Outfit', sans-serif;
+            box-sizing: border-box;
+            margin-bottom: 16px;
+        }
+
+        .modal-input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .btn-modal {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 0.92rem;
+            font-weight: 700;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.2s ease;
+        }
+
+        .btn-modal-cancel {
+            background: transparent;
+            color: var(--text-muted);
+            border-color: var(--panel-border);
+        }
+
+        .btn-modal-cancel:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .btn-modal-save {
+            background: rgba(0, 240, 255, 0.2);
+            border-color: var(--accent-cyan);
+            color: #fff;
+        }
+
+        .btn-modal-save:hover {
+            background: rgba(0, 240, 255, 0.35);
+            box-shadow: 0 0 12px rgba(0, 240, 255, 0.3);
+        }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: rgba(16, 185, 129, 0.95);
+            color: #fff;
+            padding: 9px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            display: none;
+            z-index: 1100;
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body class="login-page">
+    <div class="login-card">
+        <!-- Header -->
+        <div class="login-header">
+            <div class="login-brand">
+                <div class="login-logo">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                        <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                        <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                    </svg>
+                </div>
+                <div class="login-title-group">
+                    <h1>SSH MONITOR</h1>
+                    <p>Connect to remote host</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="error-banner" class="error-banner"></div>
+
+        <!-- Sleek Session Profile Dropdown Bar -->
+        <div class="session-bar">
+            <div class="session-bar-top">
+                <span class="session-bar-label">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                        <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                        <polyline points="7 3 7 8 15 8"></polyline>
+                    </svg>
+                    Saved Session Profile
+                </span>
+                <span style="font-size: 0.72rem; color: var(--text-muted);">Browser Memory</span>
+            </div>
+
+            <div class="session-controls-row">
+                <div class="session-dropdown-wrapper">
+                    <select id="session-select" class="session-dropdown">
+                        <!-- Populated dynamically from localStorage -->
+                    </select>
+                    <svg class="session-dropdown-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </div>
+
+                <button type="button" id="btn-save-current" class="btn-icon-action btn-icon-save" title="Save / Update profile in browser memory">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                    </svg>
+                    Save
+                </button>
+
+                <button type="button" id="btn-delete" class="btn-icon-action btn-icon-danger" title="Delete selected profile">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Connection Form -->
+        <form id="login-form" class="login-form">
+            <!-- Host and Port -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="host">Host / IP Address</label>
+                    <div class="input-wrapper">
+                        <svg class="input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="2" y1="12" x2="22" y2="12"></line>
+                            <path
+                                d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z">
+                            </path>
+                        </svg>
+                        <input type="text" id="host" name="host" placeholder="e.g. 192.168.1.100 or domain" required autofocus
+                            autocomplete="off">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="port">Port</label>
+                    <div class="input-wrapper">
+                        <input type="number" id="port" name="port" value="22" style="padding-left: 14px;" required>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Username and Sudo Password -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <div class="input-wrapper">
+                        <svg class="input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                        <input type="text" id="username" name="username" placeholder="e.g. opc or root" required>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="sudo_password">Sudo Password <span
+                            style="font-weight: 400; text-transform: none; color: var(--text-muted);">(optional)</span></label>
+                    <div class="input-wrapper">
+                        <svg class="input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                        <input type="password" id="sudo_password" name="sudo_password"
+                            placeholder="Optional">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Private Key File -->
+            <div class="form-group">
+                <label for="key_path">Private Key File (.key / .pem)</label>
+                <div class="input-wrapper">
+                    <svg class="input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2">
+                        <path d="M21 2l-2 2m-1-1l-3 3m0 0l-3-3m3 3l-3 3m-4 1a5 5 0 1 0-7 7 5 5 0 0 0 7-7l8-8"></path>
+                    </svg>
+                    <input type="text" id="key_path" name="key_path" placeholder="e.g. C:\Users\name\.ssh\key.key" required>
+                </div>
+            </div>
+
+            <!-- Connect Button -->
+            <button type="submit" id="btn-submit" class="btn-connect">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <polyline points="9 21 3 21 3 15"></polyline>
+                    <line x1="21" y1="3" x2="14" y2="10"></line>
+                    <line x1="3" y1="21" x2="10" y2="14"></line>
+                </svg>
+                <span id="btn-text">Connect to Host</span>
+            </button>
+        </form>
+    </div>
+
+    <!-- Popup Modal for Saving New Session -->
+    <div id="save-modal" class="modal-overlay">
+        <div class="modal-box">
+            <h3>Save Session Profile</h3>
+            <p>Enter a name for this session to save it in browser memory.</p>
+            <input type="text" id="modal-session-name" class="modal-input" placeholder="e.g. OCI Ampere VM" autofocus>
+            <div class="modal-actions">
+                <button type="button" id="btn-modal-cancel" class="btn-modal btn-modal-cancel">Cancel</button>
+                <button type="button" id="btn-modal-confirm" class="btn-modal btn-modal-save">Save Profile</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const STORAGE_KEY = 'ssh_dashboard_saved_sessions';
+
+        const hostInput = document.getElementById('host');
+        const portInput = document.getElementById('port');
+        const userInput = document.getElementById('username');
+        const keyInput = document.getElementById('key_path');
+        const sudoInput = document.getElementById('sudo_password');
+
+        const sessionSelect = document.getElementById('session-select');
+        const btnSaveCurrent = document.getElementById('btn-save-current');
+        const btnDelete = document.getElementById('btn-delete');
+
+        const saveModal = document.getElementById('save-modal');
+        const modalInput = document.getElementById('modal-session-name');
+        const btnModalCancel = document.getElementById('btn-modal-cancel');
+        const btnModalConfirm = document.getElementById('btn-modal-confirm');
+
+        const form = document.getElementById('login-form');
+        const errBanner = document.getElementById('error-banner');
+        const submitBtn = document.getElementById('btn-submit');
+        const btnText = document.getElementById('btn-text');
+        const toast = document.getElementById('toast');
+
+        function showToast(msg) {
+            toast.textContent = msg;
+            toast.style.display = 'block';
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 2500);
+        }
+
+        function getStoredSessions() {
+            try {
+                const data = localStorage.getItem(STORAGE_KEY);
+                if (data) return JSON.parse(data);
+            } catch (e) {
+                console.error(e);
+            }
+            return null;
+        }
+
+        function saveStoredSessions(sessions) {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function populateDropdown(activeName = null) {
+            const sessions = getStoredSessions() || {};
+            sessionSelect.innerHTML = '';
+
+            const defaultOpt = document.createElement('option');
+            defaultOpt.value = '';
+            defaultOpt.textContent = Object.keys(sessions).length > 0 
+                ? '-- Select a saved profile --' 
+                : '-- No saved profiles --';
+            sessionSelect.appendChild(defaultOpt);
+
+            const names = Object.keys(sessions);
+            names.forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = `${name} (${sessions[name].host || 'unconfigured'})`;
+                sessionSelect.appendChild(opt);
+            });
+
+            // Only select if explicitly requested by activeName (e.g. after saving)
+            if (activeName && sessions[activeName]) {
+                sessionSelect.value = activeName;
+                loadSessionIntoForm(sessions[activeName]);
+            } else {
+                sessionSelect.value = '';
+            }
+        }
+
+        function loadSessionIntoForm(sess) {
+            if (!sess) return;
+            hostInput.value = sess.host || '';
+            portInput.value = sess.port || 22;
+            userInput.value = sess.username || '';
+            keyInput.value = sess.key_path || '';
+            sudoInput.value = sess.sudo_password || '';
+        }
+
+        function clearForm() {
+            hostInput.value = '';
+            portInput.value = '22';
+            userInput.value = '';
+            keyInput.value = '';
+            sudoInput.value = '';
+        }
+
+        // On dropdown change
+        sessionSelect.addEventListener('change', () => {
+            const sessions = getStoredSessions() || {};
+            const selected = sessionSelect.value;
+            if (selected && sessions[selected]) {
+                loadSessionIntoForm(sessions[selected]);
+                showToast(`Loaded "${selected}"`);
+            } else {
+                clearForm();
+            }
+        });
+
+        // Save Button (Saves new profile if none selected, or updates current)
+        btnSaveCurrent.addEventListener('click', () => {
+            if (!hostInput.value.trim() && !userInput.value.trim() && !keyInput.value.trim()) {
+                alert('Please enter host and user details before saving.');
+                return;
+            }
+
+            const currentName = sessionSelect.value;
+            if (!currentName) {
+                openSaveModal();
+                return;
+            }
+
+            const sessions = getStoredSessions() || {};
+            sessions[currentName] = {
+                name: currentName,
+                host: hostInput.value.trim(),
+                port: parseInt(portInput.value, 10) || 22,
+                username: userInput.value.trim(),
+                key_path: keyInput.value.trim(),
+                sudo_password: sudoInput.value
+            };
+
+            saveStoredSessions(sessions);
+            populateDropdown(currentName);
+            showToast(`Updated "${currentName}"`);
+        });
+
+        // Save Modal Helpers
+        function openSaveModal() {
+            modalInput.value = sessionSelect.value || '';
+            saveModal.style.display = 'flex';
+            modalInput.focus();
+            modalInput.select();
+        }
+
+        btnModalCancel.addEventListener('click', () => {
+            saveModal.style.display = 'none';
+        });
+
+        btnModalConfirm.addEventListener('click', () => {
+            const name = modalInput.value.trim();
+            if (!name) {
+                alert('Please enter a session profile name.');
+                return;
+            }
+
+            const sessions = getStoredSessions() || {};
+            sessions[name] = {
+                name: name,
+                host: hostInput.value.trim(),
+                port: parseInt(portInput.value, 10) || 22,
+                username: userInput.value.trim(),
+                key_path: keyInput.value.trim(),
+                sudo_password: sudoInput.value
+            };
+
+            saveStoredSessions(sessions);
+            saveModal.style.display = 'none';
+            populateDropdown(name);
+            showToast(`Saved new profile "${name}"`);
+        });
+
+        // Close modal on Escape
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && saveModal.style.display === 'flex') {
+                saveModal.style.display = 'none';
+            }
+        });
+
+        // Delete current profile
+        btnDelete.addEventListener('click', () => {
+            const currentName = sessionSelect.value;
+            if (!currentName) return;
+
+            if (confirm(`Delete saved profile "${currentName}"?`)) {
+                const sessions = getStoredSessions() || {};
+                delete sessions[currentName];
+                saveStoredSessions(sessions);
+                populateDropdown();
+                showToast(`Deleted "${currentName}"`);
+            }
+        });
+
+        // Submit form
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errBanner.style.display = 'none';
+            submitBtn.disabled = true;
+            btnText.textContent = 'Connecting via SSH...';
+
+            const payload = {
+                host: hostInput.value.trim(),
+                username: userInput.value.trim(),
+                port: parseInt(portInput.value, 10) || 22,
+                key_path: keyInput.value.trim(),
+                sudo_password: sudoInput.value
+            };
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    btnText.textContent = 'Connected! Opening...';
+                    window.location.href = '/memory';
+                } else {
+                    errBanner.textContent = data.message || 'SSH connection failed. Please verify host, username, and key file.';
+                    errBanner.style.display = 'block';
+                    submitBtn.disabled = false;
+                    btnText.textContent = 'Connect to Host';
+                }
+            } catch (err) {
+                errBanner.textContent = 'Network or server error: ' + err.message;
+                errBanner.style.display = 'block';
+                submitBtn.disabled = false;
+                btnText.textContent = 'Connect to Host';
+            }
+        });
+
+        // Initialize on load
+        window.addEventListener('DOMContentLoaded', () => {
+            populateDropdown();
+        });
+    </script>
+</body>
+
+</html>

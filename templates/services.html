@@ -1,28 +1,30 @@
 {% extends 'base.html' %}
 
-{% block title %}Running Services - Radxa Board{% endblock %}
+{% block title %}Services - System Dashboard{% endblock %}
 
 {% block page_title %}System Services{% endblock %}
-{% block page_desc %}Active systemd units currently running on the board.{% endblock %}
+{% block page_desc %}Active systemd units currently running on the system.{% endblock %}
 
 {% block header_actions %}
 <div class="action-controls">
     <div class="search-wrapper">
-        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
         </svg>
         <input type="text" id="services-search" placeholder="Search services..." autocomplete="off">
     </div>
-    
+
     <label class="toggle-switch">
-        <input type="checkbox" id="auto-refresh-services" checked>
+        <input type="checkbox" id="auto-refresh-services">
         <span class="slider"></span>
-        <span class="toggle-label">Auto (5s)</span>
+        <span class="toggle-label">Auto (2m)</span>
     </label>
 
     <button id="refresh-services-btn" class="btn btn-secondary">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-refresh">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" class="icon-refresh">
             <polyline points="23 4 23 10 17 10"></polyline>
             <polyline points="1 20 1 14 7 14"></polyline>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
@@ -41,7 +43,7 @@
         </div>
         <div id="services-status-msg" class="status-indicator-text">Loading services...</div>
     </div>
-    
+
     <div class="table-responsive">
         <table class="data-table" id="services-table">
             <thead>
