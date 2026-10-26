@@ -1,0 +1,24 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Oracle VM via SSH
+        uses: appleboy/ssh-action@9b978f09f2587beff9c80449f57cb0f0612d3039
+        with:
+          host: 140.245.221.138
+          username: opc
+          key: ${{ secrets.ORACLE_VM_SSH_KEY }}
+          script: |
+            cd /home/opc/dashboard
+            git pull origin main
+            ./venv/bin/pip install -r requirements.txt
+            sudo systemctl restart dashboard.service
