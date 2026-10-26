@@ -7,9 +7,12 @@
 
 {% block header_actions %}
 <div class="action-controls">
-    <select id="logs-service-select" class="form-select">
-        <option value="dashboard" {% if selected_unit=='dashboard' %}selected{% endif %}>dashboard</option>
-        <option value="flaskapp" {% if selected_unit=='flaskapp' %}selected{% endif %}>flaskapp</option>
+    <select id="logs-service-select" class="form-select" style="min-width: 210px;">
+        {% if selected_unit and selected_unit != 'dashboard' and selected_unit != 'system' %}
+        <option value="{{ selected_unit }}" selected>{{ selected_unit }}.service</option>
+        {% endif %}
+        <option value="dashboard" {% if selected_unit=='dashboard' %}selected{% endif %}>dashboard.service</option>
+        <option value="system" {% if selected_unit=='system' %}selected{% endif %}>System Journal (Syslog)</option>
     </select>
 
     <select id="logs-limit-select" class="form-select" style="width: 110px;">
@@ -58,7 +61,7 @@
                 <span class="dot dot-yellow"></span>
                 <span class="dot dot-green"></span>
             </div>
-            <div class="terminal-title" id="terminal-title">dashboard.service - stdout/stderr logs</div>
+            <div class="terminal-title" id="terminal-title">{% if selected_unit == 'system' %}System Journal (Syslog) - all units{% else %}{{ selected_unit }}.service - stdout/stderr logs{% endif %}</div>
             <div class="terminal-stats"
                 style="font-family: 'Rajdhani', sans-serif; font-size: 0.85rem; font-weight: 600; display: flex; gap: 12px; margin-left: auto; margin-right: 16px;">
                 <span style="color: var(--success-color);">200 OK: <span id="status-200-count">0</span></span>

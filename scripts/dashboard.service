@@ -1,0 +1,13 @@
+
+[Unit]
+Description=Dashboard Web App Service
+After=network.target
+
+[Service]
+User=opc
+WorkingDirectory=/home/opc/dashboard
+ExecStart=/home/opc/dashboard/.venv/bin/python3 /home/opc/dashboard/app.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

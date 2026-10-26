@@ -8,13 +8,17 @@ import socket
 import logging
 import subprocess
 import base64
+import shlex
+import threading
 import paramiko
 from flask import Flask, request, jsonify, render_template, redirect, session
+from flask_sock import Sock
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dashboard-ssh-remote-secret-key-2026')
 
 app.config['TEMPLATES_AUTO_RELOAD'] = True
+sock = Sock(app)
 
 # Quiet noisy polling requests in werkzeug logs
 class WerkzeugFilter(logging.Filter):
@@ -29,9 +33,29 @@ werkzeug_logger.addFilter(WerkzeugFilter())
 # Map: session_id -> { "key_content": str, "key_name": str, "updated_at": float }
 _SESSION_KEYS = {}
 
+# ==============================================================================
+# Persistent SSH Client Connection Pool
+# ==============================================================================
+# Reuses existing open SSH sessions across requests instead of reconnecting on every call
+_SSH_POOL = {}
+_SSH_POOL_LOCK = threading.Lock()
+
+
+def close_pooled_client(session_id):
+    """Safely close and evict an active SSH client from the persistent pool."""
+    if not session_id:
+        return
+    with _SSH_POOL_LOCK:
+        entry = _SSH_POOL.pop(session_id, None)
+        if entry and entry.get('client'):
+            try:
+                entry['client'].close()
+            except Exception:
+                pass
+
 
 def load_key_from_string(key_text, passphrase=None):
-    """Parses a private key string (RSA, Ed25519, ECDSA, DSS) using Paramiko in memory without disk writes."""
+    """Parses a private key string (RSA, Ed25519, ECDSA) using Paramiko in memory without disk writes."""
     if not key_text or not key_text.strip():
         raise ValueError("Private key content is empty.")
 
@@ -68,7 +92,7 @@ def get_active_conn():
 
 @app.before_request
 def require_connection():
-    allowed_paths = ('/login', '/api/login', '/static/')
+    allowed_paths = ('/login', '/api/login', '/static/', '/ws/')
     if any(request.path.startswith(p) for p in allowed_paths):
         return None
     if not get_active_conn():
@@ -113,12 +137,40 @@ def test_ssh_connection(host, username, port, key_path=None, key_content=None, p
 
 
 def get_ssh_client():
-    """Establish an SSH client from active connection details."""
+    """Establish or retrieve a persistent active SSH client from the connection pool."""
     conn = get_active_conn()
     if not conn or not conn.get('host'):
         return None, "No active remote host connection."
 
     session_id = session.get('session_id')
+    if not session_id:
+        return None, "No active session found."
+
+    target_host = conn['host'].strip()
+    target_port = int(conn.get('port', 22))
+    target_user = conn.get('username', 'opc').strip()
+
+    # 1. Check existing pooled connection
+    with _SSH_POOL_LOCK:
+        if session_id in _SSH_POOL:
+            entry = _SSH_POOL[session_id]
+            if (entry['host'] == target_host and 
+                entry['port'] == target_port and 
+                entry['username'] == target_user):
+                client = entry['client']
+                transport = client.get_transport()
+                if transport and transport.is_active():
+                    entry['last_used'] = time.time()
+                    return client, None
+
+            # Outdated or dead connection: clean up
+            try:
+                entry['client'].close()
+            except Exception:
+                pass
+            _SSH_POOL.pop(session_id, None)
+
+    # 2. Establish a new pooled connection
     key_info = _SESSION_KEYS.get(session_id) if session_id else None
     passphrase = conn.get('passphrase')
 
@@ -128,58 +180,77 @@ def get_ssh_client():
         if key_info and key_info.get('key_content'):
             pkey = load_key_from_string(key_info['key_content'], passphrase)
             client.connect(
-                hostname=conn['host'].strip(),
-                port=int(conn.get('port', 22)),
-                username=conn.get('username', 'opc').strip(),
+                hostname=target_host,
+                port=target_port,
+                username=target_user,
                 pkey=pkey,
                 timeout=8,
                 banner_timeout=8
             )
-            return client, None
         elif conn.get('key_path'):
             key_path = normalize_key_path(conn.get('key_path', ''))
             if not os.path.exists(key_path):
                 return None, f"Private key file not found: {key_path}"
             client.connect(
-                hostname=conn['host'].strip(),
-                port=int(conn.get('port', 22)),
-                username=conn.get('username', 'opc').strip(),
+                hostname=target_host,
+                port=target_port,
+                username=target_user,
                 key_filename=key_path,
                 password=passphrase.strip() if (passphrase and str(passphrase).strip()) else None,
                 timeout=8,
                 banner_timeout=8
             )
-            return client, None
         else:
             return None, "No SSH key found for this active session."
+
+        # Keep alive: send heartbeat packet every 30 seconds
+        transport = client.get_transport()
+        if transport:
+            transport.set_keepalive(30)
+
+        with _SSH_POOL_LOCK:
+            _SSH_POOL[session_id] = {
+                'client': client,
+                'host': target_host,
+                'port': target_port,
+                'username': target_user,
+                'last_used': time.time()
+            }
+        return client, None
     except Exception as e:
-        return None, f"SSH connection to {conn['host']} failed: {str(e)}"
+        return None, f"SSH connection to {target_host} failed: {str(e)}"
 
 
 def run_remote_command(cmd, sudo=False, custom_sudo_password=None):
-    """Execute command on the active remote host via SSH."""
+    """Execute command on the active remote host via persistent pooled SSH connection."""
     conn = get_active_conn()
     if not conn:
         return "", "No active remote connection.", 1
 
+    session_id = session.get('session_id')
+
+    full_cmd = cmd
+    if sudo:
+        pwd = custom_sudo_password or conn.get('sudo_password')
+        if pwd:
+            full_cmd = f"echo {shlex.quote(pwd)} | sudo -S {cmd}"
+        else:
+            full_cmd = f"sudo -n {cmd}"
+
     client, err = get_ssh_client()
-    if err:
+    if err or not client:
         # Fallback to OpenSSH CLI only if key exists on disk
         raw_key_path = conn.get('key_path', '')
         if not raw_key_path:
-            return "", err, 1
+            return "", err or "SSH client unavailable", 1
         key_path = normalize_key_path(raw_key_path)
         if not os.path.exists(key_path):
-            return "", err, 1
+            return "", err or "Private key file not found", 1
 
         host = conn['host']
         user = conn.get('username', 'opc')
         port = str(conn.get('port', 22))
         try:
-            full_cmd = cmd
-            if sudo:
-                pwd = custom_sudo_password or conn.get('sudo_password')
-                full_cmd = f"echo '{pwd}' | sudo -S {cmd}" if pwd else f"sudo -n {cmd}"
             ssh_args = [
                 "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
                 "-i", key_path, "-p", port, f"{user}@{host}", full_cmd
@@ -187,28 +258,33 @@ def run_remote_command(cmd, sudo=False, custom_sudo_password=None):
             res = subprocess.run(ssh_args, capture_output=True, text=True, timeout=12)
             return res.stdout, res.stderr, res.returncode
         except Exception:
-            return "", err, 1
-
-    full_cmd = cmd
-    if sudo:
-        pwd = custom_sudo_password or conn.get('sudo_password')
-        if pwd:
-            full_cmd = f"echo '{pwd}' | sudo -S {cmd}"
-        else:
-            full_cmd = f"sudo -n {cmd}"
+            return "", err or "CLI fallback failed", 1
 
     try:
-        stdin, stdout, stderr = client.exec_command(full_cmd, timeout=12)
+        stdin, stdout, stderr = client.exec_command(full_cmd, timeout=15)
         out = stdout.read().decode('utf-8', errors='replace')
         err_out = stderr.read().decode('utf-8', errors='replace')
         code = stdout.channel.recv_exit_status()
-        client.close()
+        # Keep client open in the pool for subsequent requests!
         return out, err_out, code
-    except Exception as e:
+    except (paramiko.SSHException, socket.error) as e:
+        # Remote connection dropped: evict from pool and retry once
+        if session_id:
+            close_pooled_client(session_id)
+
+        client, retry_err = get_ssh_client()
+        if retry_err or not client:
+            return "", f"Connection dropped: {str(e)}", 1
+
         try:
-            client.close()
-        except Exception:
-            pass
+            stdin, stdout, stderr = client.exec_command(full_cmd, timeout=15)
+            out = stdout.read().decode('utf-8', errors='replace')
+            err_out = stderr.read().decode('utf-8', errors='replace')
+            code = stdout.channel.recv_exit_status()
+            return out, err_out, code
+        except Exception as retry_e:
+            return "", str(retry_e), 1
+    except Exception as e:
         return "", str(e), 1
 
 
@@ -237,7 +313,8 @@ def inject_globals():
     conn = get_active_conn() or {}
     return {
         'system_ip': conn.get('host', '127.0.0.1'),
-        'system_hostname': get_display_hostname()
+        'system_hostname': get_display_hostname(),
+        'system_user': conn.get('username', 'opc')
     }
 
 
@@ -347,6 +424,9 @@ def api_login():
         session['session_id'] = str(uuid.uuid4())
     session_id = session['session_id']
 
+    # Evict any existing pooled SSH connection for this session
+    close_pooled_client(session_id)
+
     # Store key strictly in server RAM (never on disk, never in client cookie)
     if key_content:
         _SESSION_KEYS[session_id] = {
@@ -378,6 +458,7 @@ def logout():
     session_id = session.get('session_id')
     if session_id:
         _SESSION_KEYS.pop(session_id, None)
+        close_pooled_client(session_id)
     session.clear()
     return redirect('/login')
 
@@ -427,8 +508,91 @@ def files_view():
 
 
 # ==============================================================================
-# API Endpoints
+# API Endpoints & WebSockets
 # ==============================================================================
+@sock.route('/ws/terminal')
+def terminal_socket(ws):
+    """Interactive full-duplex PTY terminal stream for xterm.js over WebSocket."""
+    conn = get_active_conn()
+    if not conn:
+        try:
+            ws.send("\r\n\x1b[1;31m[Authentication Required: Please log in to your server first.]\x1b[0m\r\n")
+            ws.close()
+        except Exception:
+            pass
+        return
+
+    client, err = get_ssh_client()
+    if err or not client:
+        try:
+            ws.send(f"\r\n\x1b[1;31m[SSH Connection Error: {err}]\x1b[0m\r\n")
+            ws.close()
+        except Exception:
+            pass
+        return
+
+    channel = None
+    stop_event = threading.Event()
+    try:
+        # Start interactive shell channel with PTY
+        channel = client.invoke_shell(term='xterm-256color', width=90, height=30)
+        channel.settimeout(0.05)
+
+        # Background thread: read bytes from remote PTY and push to browser xterm
+        def stream_remote_output():
+            while not stop_event.is_set():
+                try:
+                    if channel.recv_ready():
+                        data = channel.recv(4096)
+                        if not data:
+                            break
+                        ws.send(data.decode('utf-8', errors='replace'))
+                    elif channel.exit_status_ready():
+                        break
+                    else:
+                        time.sleep(0.01)
+                except Exception:
+                    break
+            stop_event.set()
+
+        reader_thread = threading.Thread(target=stream_remote_output, daemon=True)
+        reader_thread.start()
+
+        # Foreground loop: receive keystrokes and resize signals from browser xterm
+        while not stop_event.is_set():
+            try:
+                msg = ws.receive(timeout=0.08)
+                if msg is None:
+                    continue
+                if isinstance(msg, str):
+                    if msg.startswith('{"type":"resize"'):
+                        try:
+                            cfg = json.loads(msg)
+                            cols = int(cfg.get('cols', 90))
+                            rows = int(cfg.get('rows', 30))
+                            channel.resize_pty(width=cols, height=rows)
+                            continue
+                        except Exception:
+                            pass
+                    channel.send(msg)
+                elif isinstance(msg, bytes):
+                    channel.send(msg)
+            except Exception:
+                break
+    except Exception as e:
+        try:
+            ws.send(f"\r\n\x1b[1;31m[Terminal Session Failed: {str(e)}]\x1b[0m\r\n")
+        except Exception:
+            pass
+    finally:
+        stop_event.set()
+        if channel:
+            try:
+                channel.close()
+            except Exception:
+                pass
+
+
 @app.route('/api/terminal/exec', methods=['POST'])
 def api_terminal_exec():
     data = request.get_json() or {}
@@ -715,7 +879,8 @@ def api_files_read():
     if not path:
         return jsonify({"status": "error", "message": "File path is required."}), 400
 
-    cmd_check = f"sudo stat -c '%s|%F' '{path}' 2>/dev/null"
+    q_path = shlex.quote(path)
+    cmd_check = f"sudo stat -c '%s|%F' {q_path} 2>/dev/null"
     stdout, stderr, code = run_remote_command(cmd_check, sudo=True)
     if code != 0 or not stdout.strip():
         return jsonify({"status": "error", "message": f"File does not exist: {path}"}), 404
@@ -724,7 +889,7 @@ def api_files_read():
     if size > 5 * 1024 * 1024:
         return jsonify({"status": "error", "message": f"File is too large ({size} bytes). Maximum supported size for text editing is 5MB."}), 400
 
-    cmd_read = f"sudo base64 -w 0 '{path}'"
+    cmd_read = f"sudo base64 -w 0 {q_path}"
     stdout_b64, stderr, code = run_remote_command(cmd_read, sudo=True)
     if code != 0:
         return jsonify({"status": "error", "message": stderr or "Failed to read file."}), 500
@@ -761,11 +926,13 @@ def api_files_write():
     if not path:
         return jsonify({"status": "error", "message": "File path is required."}), 400
 
+    q_path = shlex.quote(path)
     if create_backup:
-        run_remote_command(f"sudo cp -f '{path}' '{path}.bak' 2>/dev/null", sudo=True)
+        q_bak = shlex.quote(f"{path}.bak")
+        run_remote_command(f"sudo cp -f {q_path} {q_bak} 2>/dev/null", sudo=True)
 
     b64_content = base64.b64encode(content.encode('utf-8')).decode('ascii')
-    cmd = f"echo '{b64_content}' | base64 -d | sudo tee '{path}' > /dev/null"
+    cmd = f"echo {shlex.quote(b64_content)} | base64 -d | sudo tee {q_path} > /dev/null"
     stdout, stderr, code = run_remote_command(cmd, sudo=True)
     if code != 0:
         return jsonify({"status": "error", "message": stderr or "Failed to write file."}), 500
@@ -790,10 +957,8 @@ def api_files_create():
     if not path:
         return jsonify({"status": "error", "message": "Path is required."}), 400
 
-    if item_type == 'dir':
-        cmd = f"sudo mkdir -p '{path}'"
-    else:
-        cmd = f"sudo touch '{path}'"
+    q_path = shlex.quote(path)
+    cmd = f"sudo mkdir -p {q_path}" if item_type == 'dir' else f"sudo touch {q_path}"
     stdout, stderr, code = run_remote_command(cmd, sudo=True)
     if code != 0:
         return jsonify({"status": "error", "message": stderr or "Creation failed."}), 500
@@ -807,7 +972,7 @@ def api_files_delete():
     if not path or path in ('/', '/etc', '/root', '/home', '/var', '/usr', '/bin'):
         return jsonify({"status": "error", "message": "Cannot delete protected system directory."}), 400
 
-    cmd = f"sudo rm -rf '{path}'"
+    cmd = f"sudo rm -rf {shlex.quote(path)}"
     stdout, stderr, code = run_remote_command(cmd, sudo=True)
     if code != 0:
         return jsonify({"status": "error", "message": stderr or "Deletion failed."}), 500
@@ -834,11 +999,13 @@ def api_files_nginx_test():
 @app.route('/api/services', methods=['GET'])
 def api_services():
     try:
-        cmd = "systemctl list-units --type=service --state=running --output=json --no-pager"
+        show_all = request.args.get('all', 'false').lower() in ('true', '1', 't')
+        state_arg = "--all" if show_all else "--state=running"
+        cmd = f"systemctl list-units --type=service {state_arg} --output=json --no-pager"
         stdout, stderr, code = run_remote_command(cmd)
 
         if code != 0 or not stdout.strip():
-            cmd_fallback = "systemctl list-units --type=service --state=running --no-pager --no-legend"
+            cmd_fallback = f"systemctl list-units --type=service {state_arg} --no-pager --no-legend"
             stdout_fb, _, code_fb = run_remote_command(cmd_fallback)
             if code_fb == 0 and stdout_fb.strip():
                 formatted = []
@@ -894,7 +1061,7 @@ def control_service():
             return jsonify({"status": "error", "message": "Invalid unit name."}), 400
 
         password = request.headers.get('X-Sudo-Password')
-        cmd = f"systemctl {action} {unit}.service"
+        cmd = f"systemctl {action} {shlex.quote(unit + '.service')}"
         stdout, stderr, code = run_remote_command(cmd, sudo=True, custom_sudo_password=password)
 
         stderr_lower = stderr.lower()
@@ -975,7 +1142,8 @@ def kill_port_process():
             return jsonify({"status": "error", "message": "Valid numeric PID required."}), 400
 
         password = request.headers.get('X-Sudo-Password')
-        stdout, stderr, code = run_remote_command(f"kill -9 {pid}", sudo=True, custom_sudo_password=password)
+        cmd = f"kill -9 {int(pid)}"
+        stdout, stderr, code = run_remote_command(cmd, sudo=True, custom_sudo_password=password)
 
         stderr_lower = stderr.lower()
         if code != 0 and ("incorrect password" in stderr_lower or "try again" in stderr_lower or "password required" in stderr_lower):
@@ -1006,10 +1174,14 @@ def api_get_logs(unit):
 
     limit = request.args.get('limit', default=50, type=int)
     limit = max(10, min(500, limit))
-    service_name = f"{unit}.service"
 
     try:
-        cmd = f"journalctl -u {service_name} -n {limit} --no-pager"
+        if unit.lower() in ('system', 'syslog', 'systemd'):
+            cmd = f"journalctl -n {int(limit)} --no-pager"
+        else:
+            clean_unit = unit[:-8] if unit.endswith('.service') else unit
+            service_name = f"{clean_unit}.service"
+            cmd = f"journalctl -u {shlex.quote(service_name)} -n {int(limit)} --no-pager"
         # Run non-sudo first to avoid audit logging loop and disk writes
         stdout, stderr, code = run_remote_command(cmd, sudo=False)
 

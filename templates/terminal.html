@@ -1,23 +1,30 @@
 {% extends 'base.html' %}
 
-{% block title %}Terminal - System Dashboard{% endblock %}
+{% block title %}Interactive Terminal - System Dashboard{% endblock %}
 
 {% block page_title %}Terminal Console{% endblock %}
-{% block page_desc %}Cockpit-style interactive command-line shell on remote host.{% endblock %}
+{% block page_desc %}Cockpit-grade interactive pseudo-terminal (PTY) with real-time WebSocket streaming.{% endblock %}
 
 {% block header_actions %}
-<div class="action-controls" style="flex-wrap: wrap; gap: 8px;">
-    <!-- Sudo Toggle -->
-    <label class="toggle-switch" title="Execute commands with sudo privileges">
-        <input type="checkbox" id="terminal-sudo-toggle">
-        <span class="slider"></span>
-        <span class="toggle-label" style="color: var(--warning-color); font-weight: 600;">Sudo Mode</span>
-    </label>
+<div class="action-controls" style="flex-wrap: wrap; gap: 8px; align-items: center;">
+    <!-- Connection Status Indicator -->
+    <div class="terminal-conn-status" id="terminal-conn-status">
+        <span class="status-indicator-dot" id="ws-status-dot" style="background: #eab308; box-shadow: 0 0 8px #eab308;"></span>
+        <span id="ws-status-text" style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Connecting...</span>
+    </div>
 
-    <!-- Clear Button -->
-    <button id="terminal-clear-btn" class="btn btn-secondary" title="Clear terminal screen (Ctrl+L)">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round">
+    <!-- Reconnect Button -->
+    <button id="terminal-reconnect-btn" class="btn btn-secondary btn-sm" title="Reconnect WebSocket session" style="display: none;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+        </svg>
+        <span>Reconnect</span>
+    </button>
+
+    <!-- Clear Screen Button -->
+    <button id="terminal-clear-btn" class="btn btn-secondary btn-sm" title="Clear terminal screen (Ctrl+L)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="3 6 5 6 21 6"></polyline>
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
         </svg>
@@ -30,13 +37,14 @@
 <div class="terminal-container">
     <!-- Quick Command Shortcuts Bar -->
     <div class="quick-commands-bar">
-        <span class="quick-label">Quick Snippets:</span>
-        <button type="button" class="btn-snippet" data-cmd="uname -a">uname -a</button>
+        <span class="quick-label">Interactive Snippets:</span>
+        <button type="button" class="btn-snippet" data-cmd="htop || top">htop</button>
         <button type="button" class="btn-snippet" data-cmd="df -h">df -h</button>
         <button type="button" class="btn-snippet" data-cmd="free -h">free -h</button>
         <button type="button" class="btn-snippet" data-cmd="uptime">uptime</button>
         <button type="button" class="btn-snippet" data-cmd="ip -br a">ip -br a</button>
-        <button type="button" class="btn-snippet" data-cmd="systemctl --failed">systemctl --failed</button>
+        <button type="button" class="btn-snippet" data-cmd="journalctl -xe -n 20 --no-pager">journal -xe</button>
+        <button type="button" class="btn-snippet" data-cmd="systemctl list-units --type=service --state=running">systemctl</button>
         <button type="button" class="btn-snippet" data-cmd="docker ps 2>/dev/null || podman ps 2>/dev/null || echo 'No container runtime'">containers</button>
     </div>
 
@@ -56,50 +64,42 @@
                     <line x1="12" y1="19" x2="20" y2="19"></line>
                 </svg>
                 <span id="window-user-host">{{ terminal_user }}@{{ system_hostname }}</span>
-                <span class="window-shell-type">(bash)</span>
+                <span class="window-shell-type">(PTY xterm-256color)</span>
             </div>
             <div class="window-status">
                 <span class="status-indicator-dot online" style="width: 7px; height: 7px;"></span>
-                <span style="font-size: 0.72rem; color: var(--text-muted); font-family: monospace;">SSH</span>
+                <span style="font-size: 0.72rem; color: var(--text-muted); font-family: monospace;">WebSocket</span>
             </div>
         </div>
 
-        <!-- Terminal Output Buffer -->
+        <!-- xterm.js Interactive Canvas Container -->
         <div class="terminal-screen" id="terminal-screen">
-            <!-- Welcome Banner -->
-            <div class="terminal-banner">
-                <div class="banner-title">Antigravity Cockpit Terminal — Connected via SSH</div>
-                <div class="banner-sub">Target Host: <span style="color: var(--accent-cyan);">{{ system_ip }}</span> ({{ system_hostname }}) | User: <span style="color: var(--accent-purple);">{{ terminal_user }}</span></div>
-                <div class="banner-hint">Type any bash command and press Enter. Navigate history with Up/Down arrows. Use 'clear' or Ctrl+L to wipe buffer.</div>
-            </div>
-
-            <!-- Command Output History Elements appended dynamically -->
-            <div id="terminal-history"></div>
-
-            <!-- Active Prompt & Input Line -->
-            <div class="terminal-active-line" id="terminal-active-line">
-                <span class="terminal-prompt" id="terminal-prompt">
-                    <span class="prompt-user">{{ terminal_user }}</span><span class="prompt-at">@</span><span class="prompt-host">{{ system_hostname }}</span>:<span class="prompt-cwd" id="prompt-cwd">~</span><span class="prompt-sign">$</span>
-                </span>
-                <div class="terminal-input-wrapper">
-                    <input type="text" id="terminal-input" class="terminal-input" autocomplete="off" autocorrect="off"
-                        autocapitalize="off" spellcheck="false" autofocus>
-                    <div id="terminal-spinner" class="terminal-spinner" style="display: none;"></div>
-                </div>
-            </div>
+            <div id="xterm-container" style="width: 100%; height: 100%;"></div>
         </div>
     </div>
 </div>
 {% endblock %}
 
 {% block extra_css %}
+<!-- xterm.js CSS -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
 <style>
     .terminal-container {
         display: flex;
         flex-direction: column;
         gap: 12px;
-        height: calc(100vh - 180px);
-        min-height: 520px;
+        height: calc(100vh - 170px);
+        min-height: 550px;
+    }
+
+    .terminal-conn-status {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid var(--panel-border);
+        padding: 5px 12px;
+        border-radius: 20px;
     }
 
     .quick-commands-bar {
@@ -107,7 +107,7 @@
         align-items: center;
         gap: 8px;
         overflow-x: auto;
-        padding-bottom: 4px;
+        padding-bottom: 2px;
     }
 
     .quick-label {
@@ -199,342 +199,213 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        width: 60px;
+        width: 90px;
         justify-content: flex-end;
     }
 
     .terminal-screen {
         flex: 1;
-        overflow-y: auto;
-        padding: 16px 20px;
-        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-        font-size: 0.9rem;
-        line-height: 1.5;
-        color: #e2e8f0;
-        cursor: text;
-        background: radial-gradient(at 0% 0%, rgba(0, 240, 255, 0.02) 0px, transparent 40%), #090d16;
-    }
-
-    .terminal-banner {
-        padding-bottom: 14px;
-        margin-bottom: 14px;
-        border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
-        color: var(--text-muted);
-        font-size: 0.82rem;
-    }
-
-    .banner-title {
-        font-weight: 700;
-        color: #fff;
-        font-size: 0.88rem;
-        margin-bottom: 2px;
-    }
-
-    .banner-sub {
-        margin-bottom: 4px;
-    }
-
-    .banner-hint {
-        color: rgba(255, 255, 255, 0.4);
-        font-size: 0.75rem;
-    }
-
-    .terminal-command-entry {
-        margin-bottom: 12px;
-        animation: fadeIn 0.15s ease-out;
-    }
-
-    .entry-prompt-line {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-weight: 600;
-    }
-
-    .entry-command-text {
-        color: #fff;
-        font-weight: 700;
-    }
-
-    .entry-status-badge {
-        font-size: 0.68rem;
-        padding: 1px 6px;
-        border-radius: 4px;
-        margin-left: auto;
-        font-family: 'Outfit', sans-serif;
-        font-weight: 600;
-    }
-
-    .entry-status-badge.success {
-        background: rgba(16, 185, 129, 0.15);
-        color: #6ee7b7;
-        border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-
-    .entry-status-badge.error {
-        background: rgba(239, 68, 68, 0.15);
-        color: #fca5a5;
-        border: 1px solid rgba(239, 68, 68, 0.3);
-    }
-
-    .entry-output {
-        white-space: pre-wrap;
-        word-break: break-all;
-        margin-top: 4px;
-        padding-left: 2px;
-        color: #cbd5e1;
-    }
-
-    .entry-output.stderr-text {
-        color: #fca5a5;
-    }
-
-    .terminal-active-line {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 8px;
-    }
-
-    .terminal-prompt {
-        font-weight: 600;
-        white-space: nowrap;
-        user-select: none;
-    }
-
-    .prompt-user { color: var(--accent-cyan); }
-    .prompt-at { color: var(--text-muted); }
-    .prompt-host { color: var(--accent-purple); }
-    .prompt-cwd { color: #fbbf24; margin: 0 2px; }
-    .prompt-sign { color: #fff; }
-
-    .terminal-input-wrapper {
-        flex: 1;
-        display: flex;
-        align-items: center;
+        overflow: hidden;
+        padding: 10px 14px;
+        background: #090d16;
         position: relative;
     }
 
-    .terminal-input {
-        width: 100%;
-        background: transparent;
-        border: none;
-        outline: none;
-        color: #fff;
-        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-        font-size: 0.92rem;
-        padding: 0;
-        margin: 0;
-        caret-color: var(--accent-cyan);
+    /* Style scrollbar in xterm */
+    .xterm .xterm-viewport::-webkit-scrollbar {
+        width: 8px;
     }
-
-    .terminal-spinner {
-        width: 14px;
-        height: 14px;
-        border: 2px solid rgba(0, 240, 255, 0.2);
-        border-top-color: var(--accent-cyan);
-        border-radius: 50%;
-        animation: spin 0.6s linear infinite;
-        position: absolute;
-        right: 0;
+    .xterm .xterm-viewport::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.3);
     }
-
-    @keyframes spin {
-        to { transform: rotate(360deg); }
+    .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+        background: rgba(0, 240, 255, 0.2);
+        border-radius: 4px;
+    }
+    .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+        background: rgba(0, 240, 255, 0.4);
     }
 </style>
 {% endblock %}
 
 {% block extra_js %}
+<!-- xterm.js bundle & addons -->
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
+
 <script>
     (function () {
-        const terminalScreen = document.getElementById('terminal-screen');
-        const terminalHistory = document.getElementById('terminal-history');
-        const terminalInput = document.getElementById('terminal-input');
-        const terminalPrompt = document.getElementById('terminal-prompt');
-        const promptCwd = document.getElementById('prompt-cwd');
-        const terminalSpinner = document.getElementById('terminal-spinner');
-        const sudoToggle = document.getElementById('terminal-sudo-toggle');
+        const container = document.getElementById('xterm-container');
+        const statusDot = document.getElementById('ws-status-dot');
+        const statusText = document.getElementById('ws-status-text');
+        const reconnectBtn = document.getElementById('terminal-reconnect-btn');
         const clearBtn = document.getElementById('terminal-clear-btn');
         const snippetButtons = document.querySelectorAll('.btn-snippet');
 
-        let currentCwd = '~';
-        let commandHistory = [];
-        let historyIndex = -1;
-        let isRunning = false;
+        let term = null;
+        let fitAddon = null;
+        let ws = null;
+        let isConnected = false;
 
-        // Keep input focused when clicking anywhere in the terminal screen
-        terminalScreen.addEventListener('click', (e) => {
-            // Only focus if user is not selecting text
-            if (window.getSelection().toString().length === 0) {
-                terminalInput.focus();
+        function setStatus(state, label) {
+            statusText.textContent = label;
+            if (state === 'online') {
+                statusDot.style.background = '#10b981';
+                statusDot.style.boxShadow = '0 0 8px #10b981';
+                reconnectBtn.style.display = 'none';
+                isConnected = true;
+            } else if (state === 'connecting') {
+                statusDot.style.background = '#eab308';
+                statusDot.style.boxShadow = '0 0 8px #eab308';
+                reconnectBtn.style.display = 'none';
+                isConnected = false;
+            } else {
+                statusDot.style.background = '#ef4444';
+                statusDot.style.boxShadow = '0 0 8px #ef4444';
+                reconnectBtn.style.display = 'inline-flex';
+                isConnected = false;
             }
-        });
+        }
 
-        // Snippet buttons click
+        function initXterm() {
+            term = new Terminal({
+                theme: {
+                    background: '#090d16',
+                    foreground: '#e2e8f0',
+                    cursor: '#00f0ff',
+                    cursorAccent: '#090d16',
+                    selectionBackground: 'rgba(0, 240, 255, 0.3)',
+                    black: '#1e293b',
+                    red: '#f87171',
+                    green: '#4ade80',
+                    yellow: '#fbbf24',
+                    blue: '#60a5fa',
+                    magenta: '#c084fc',
+                    cyan: '#22d3ee',
+                    white: '#f8fafc',
+                    brightBlack: '#64748b',
+                    brightRed: '#ef4444',
+                    brightGreen: '#22c55e',
+                    brightYellow: '#f59e0b',
+                    brightBlue: '#3b82f6',
+                    brightMagenta: '#a855f7',
+                    brightCyan: '#06b6d4',
+                    brightWhite: '#ffffff'
+                },
+                fontSize: 14,
+                fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace",
+                lineHeight: 1.25,
+                cursorBlink: true,
+                cursorStyle: 'block',
+                scrollback: 5000,
+                convertEol: true
+            });
+
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.loadAddon(new WebLinksAddon.WebLinksAddon());
+
+            term.open(container);
+            fitAddon.fit();
+
+            // Send keyboard inputs to WebSocket
+            term.onData(data => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(data);
+                }
+            });
+
+            // Auto resize observer
+            window.addEventListener('resize', () => {
+                if (fitAddon && isConnected) {
+                    fitAddon.fit();
+                    sendDimensions();
+                }
+            });
+        }
+
+        function sendDimensions() {
+            if (ws && ws.readyState === WebSocket.OPEN && term) {
+                ws.send(JSON.stringify({
+                    type: 'resize',
+                    cols: term.cols,
+                    rows: term.rows
+                }));
+            }
+        }
+
+        function connectWebSocket() {
+            setStatus('connecting', 'Connecting...');
+            
+            const protocol = (location.protocol === 'https:') ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${location.host}/ws/terminal`;
+
+            try {
+                ws = new WebSocket(wsUrl);
+            } catch (err) {
+                setStatus('offline', 'Connection Error');
+                if (term) term.write(`\r\n\x1b[31m[WebSocket connection error: ${err.message}]\x1b[0m\r\n`);
+                return;
+            }
+
+            ws.onopen = () => {
+                setStatus('online', 'Connected');
+                fitAddon.fit();
+                sendDimensions();
+                term.focus();
+            };
+
+            ws.onmessage = (event) => {
+                if (term) {
+                    term.write(event.data);
+                }
+            };
+
+            ws.onerror = () => {
+                setStatus('offline', 'Error');
+            };
+
+            ws.onclose = (event) => {
+                setStatus('offline', 'Disconnected');
+                if (term) {
+                    term.write('\r\n\x1b[1;33m[Session closed by remote host or server.]\x1b[0m\r\n');
+                }
+            };
+        }
+
+        // Snippet buttons click: sends command directly into the interactive PTY stream
         snippetButtons.forEach(btn => {
             btn.addEventListener('click', () => {
                 const cmd = btn.getAttribute('data-cmd');
-                if (cmd && !isRunning) {
-                    terminalInput.value = cmd;
-                    executeCommand(cmd);
+                if (cmd && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(cmd + '\r');
+                    term.focus();
                 }
             });
         });
 
-        // Clear terminal
-        function clearTerminal() {
-            terminalHistory.innerHTML = '';
-            terminalInput.value = '';
-            terminalInput.focus();
-        }
-
-        clearBtn.addEventListener('click', clearTerminal);
-
-        // Keyboard events on input
-        terminalInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                const cmd = terminalInput.value.trim();
-                if (cmd) {
-                    commandHistory.push(cmd);
-                    historyIndex = commandHistory.length;
-                    executeCommand(cmd);
-                }
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                if (commandHistory.length > 0 && historyIndex > 0) {
-                    historyIndex--;
-                    terminalInput.value = commandHistory[historyIndex];
-                }
-            } else if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                if (historyIndex < commandHistory.length - 1) {
-                    historyIndex++;
-                    terminalInput.value = commandHistory[historyIndex];
-                } else {
-                    historyIndex = commandHistory.length;
-                    terminalInput.value = '';
-                }
-            } else if (e.key === 'l' && e.ctrlKey) {
-                e.preventDefault();
-                clearTerminal();
-            } else if (e.key === 'c' && e.ctrlKey) {
-                e.preventDefault();
-                terminalInput.value = '';
+        // Clear terminal button
+        clearBtn.addEventListener('click', () => {
+            if (term) {
+                term.clear();
+                term.focus();
             }
         });
 
-        async function executeCommand(cmd) {
-            if (isRunning) return;
-
-            // Handle client-side clear
-            if (cmd === 'clear') {
-                clearTerminal();
-                return;
+        // Reconnect button
+        reconnectBtn.addEventListener('click', () => {
+            if (term) {
+                term.clear();
             }
+            connectWebSocket();
+        });
 
-            isRunning = true;
-            terminalInput.disabled = true;
-            terminalSpinner.style.display = 'block';
-
-            const useSudo = sudoToggle ? sudoToggle.checked : false;
-            const promptSnapshot = terminalPrompt.cloneNode(true);
-
-            // Create command entry element
-            const entry = document.createElement('div');
-            entry.className = 'terminal-command-entry';
-
-            const promptLine = document.createElement('div');
-            promptLine.className = 'entry-prompt-line';
-            promptLine.appendChild(promptSnapshot);
-
-            const cmdSpan = document.createElement('span');
-            cmdSpan.className = 'entry-command-text';
-            cmdSpan.textContent = cmd;
-            promptLine.appendChild(cmdSpan);
-
-            entry.appendChild(promptLine);
-
-            const outputEl = document.createElement('div');
-            outputEl.className = 'entry-output';
-            outputEl.textContent = 'Running...';
-            entry.appendChild(outputEl);
-
-            terminalHistory.appendChild(entry);
-            terminalInput.value = '';
-            scrollToBottom();
-
-            try {
-                const res = await fetch('/api/terminal/exec', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        command: cmd,
-                        cwd: currentCwd,
-                        sudo: useSudo
-                    })
-                });
-
-                const data = await res.json();
-
-                if (data.clear) {
-                    clearTerminal();
-                    return;
-                }
-
-                // Update CWD if changed
-                if (data.cwd) {
-                    currentCwd = data.cwd;
-                    // Format CWD cleanly (replace /home/user with ~)
-                    let displayCwd = data.cwd;
-                    if (displayCwd.startsWith('/home/')) {
-                        const parts = displayCwd.split('/');
-                        if (parts.length >= 3) {
-                            displayCwd = '~' + displayCwd.slice(('/home/' + parts[2]).length);
-                            if (!displayCwd) displayCwd = '~';
-                        }
-                    }
-                    promptCwd.textContent = displayCwd;
-                }
-
-                // Add status badge
-                const badge = document.createElement('span');
-                badge.className = `entry-status-badge ${data.code === 0 ? 'success' : 'error'}`;
-                badge.textContent = data.code === 0 ? 'exit 0' : `exit ${data.code}`;
-                promptLine.appendChild(badge);
-
-                // Format output
-                let content = '';
-                if (data.stdout) content += data.stdout;
-                if (data.stderr) {
-                    if (content) content += '\n';
-                    content += data.stderr;
-                }
-
-                outputEl.textContent = content || '';
-                if (data.code !== 0 && !data.stdout) {
-                    outputEl.classList.add('stderr-text');
-                }
-
-            } catch (err) {
-                outputEl.textContent = `Execution failed: ${err.message}`;
-                outputEl.classList.add('stderr-text');
-            } finally {
-                isRunning = false;
-                terminalInput.disabled = false;
-                terminalSpinner.style.display = 'none';
-                terminalInput.focus();
-                scrollToBottom();
-            }
-        }
-
-        function scrollToBottom() {
-            terminalScreen.scrollTop = terminalScreen.scrollHeight;
-        }
-
-        // Initialize focus
-        terminalInput.focus();
+        // Initialize terminal and open WebSocket on load
+        window.addEventListener('DOMContentLoaded', () => {
+            initXterm();
+            connectWebSocket();
+        });
     })();
 </script>
 {% endblock %}

@@ -145,8 +145,7 @@ function initServicesControl() {
                     <td><span class="badge badge-success">${s.sub}</span></td>
                     <td class="desc-col">${s.description}</td>
                     <td style="text-align: right; white-space: nowrap;">
-                        ${(s.unit === 'dashboard' || s.unit === 'flaskapp') ? `
-                        <a href="/logs?unit=${s.unit}" class="btn-info" style="margin-right: 4px; text-decoration: none;">
+                        <a href="/logs?unit=${encodeURIComponent(s.unit)}" class="btn-info" style="margin-right: 4px; text-decoration: none;">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                                 <polyline points="14 2 14 8 20 8"></polyline>
@@ -154,7 +153,7 @@ function initServicesControl() {
                                 <line x1="16" y1="17" x2="8" y2="17"></line>
                             </svg>
                             <span>Logs</span>
-                        </a>` : ''}
+                        </a>
                         <button class="btn-warning" onclick="controlService('${s.unit}', 'restart')" style="margin-right: 4px;">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
@@ -577,7 +576,11 @@ function initLogsControl() {
         const refreshIcon = refreshBtn ? refreshBtn.querySelector('svg') : null;
         if (refreshIcon) refreshIcon.classList.add('spinning');
 
-        terminalTitle.textContent = `${unit}.service - stdout/stderr logs`;
+        if (terminalTitle) {
+            terminalTitle.textContent = (unit === 'system' || unit === 'syslog')
+                ? 'System Journal (Syslog) - all units'
+                : `${unit}.service - stdout/stderr logs`;
+        }
 
         try {
             const response = await fetch(`/api/logs/${unit}?limit=${limit}`);
@@ -595,6 +598,80 @@ function initLogsControl() {
             logsOutput.style.color = 'var(--error-color)';
         } finally {
             if (refreshIcon) refreshIcon.classList.remove('spinning');
+        }
+    }
+
+    async function loadAvailableServices(selectedUnit) {
+        try {
+            const response = await fetch('/api/services?all=true');
+            if (!response.ok) return;
+            const services = await response.json();
+            if (!Array.isArray(services) || services.length === 0) return;
+
+            const activeUnit = serviceSelect.value || selectedUnit || 'dashboard';
+
+            // Partition into groups
+            const coreAppUnits = new Set(['dashboard', 'flaskapp']);
+            const runningServices = [];
+            const otherServices = [];
+
+            services.forEach(s => {
+                const u = s.unit;
+                if (!u || u === 'unknown' || coreAppUnits.has(u)) return;
+                if (s.sub === 'running' || s.active === 'active') {
+                    runningServices.push(s);
+                } else {
+                    otherServices.push(s);
+                }
+            });
+
+            runningServices.sort((a, b) => a.unit.localeCompare(b.unit));
+            otherServices.sort((a, b) => a.unit.localeCompare(b.unit));
+
+            let html = '';
+
+            // Group 1: Core & System
+            html += '<optgroup label="System & Applications">';
+            html += `<option value="dashboard"${activeUnit === 'dashboard' ? ' selected' : ''}>dashboard.service</option>`;
+            html += `<option value="system"${activeUnit === 'system' ? ' selected' : ''}>System Journal (Syslog)</option>`;
+            if (services.some(s => s.unit === 'flaskapp')) {
+                html += `<option value="flaskapp"${activeUnit === 'flaskapp' ? ' selected' : ''}>flaskapp.service</option>`;
+            }
+            html += '</optgroup>';
+
+            // Group 2: Running Services
+            if (runningServices.length > 0) {
+                html += '<optgroup label="Running Services">';
+                runningServices.forEach(s => {
+                    const sel = activeUnit === s.unit ? ' selected' : '';
+                    html += `<option value="${s.unit}"${sel}>${s.unit}.service</option>`;
+                });
+                html += '</optgroup>';
+            }
+
+            // Group 3: Other Services
+            if (otherServices.length > 0) {
+                html += '<optgroup label="Other Available Services">';
+                otherServices.forEach(s => {
+                    const sel = activeUnit === s.unit ? ' selected' : '';
+                    html += `<option value="${s.unit}"${sel}>${s.unit}.service (${s.active})</option>`;
+                });
+                html += '</optgroup>';
+            }
+
+            serviceSelect.innerHTML = html;
+
+            // Ensure custom unit passed via query exists in dropdown
+            if (!Array.from(serviceSelect.options).some(o => o.value === activeUnit)) {
+                const opt = document.createElement('option');
+                opt.value = activeUnit;
+                opt.textContent = `${activeUnit}.service`;
+                opt.selected = true;
+                serviceSelect.insertBefore(opt, serviceSelect.firstChild);
+            }
+            serviceSelect.value = activeUnit;
+        } catch (e) {
+            console.warn('Could not populate full services list for logs dropdown:', e);
         }
     }
 
@@ -661,6 +738,14 @@ function initLogsControl() {
     // Event listeners
     if (serviceSelect) {
         serviceSelect.addEventListener('change', () => {
+            const unit = serviceSelect.value;
+            // Update URL without page reload
+            try {
+                const newUrl = new URL(window.location);
+                newUrl.searchParams.set('unit', unit);
+                window.history.replaceState({}, '', newUrl);
+            } catch (e) {}
+
             fetchLogs();
             setupAutoRefresh();
         });
@@ -712,10 +797,20 @@ function initLogsControl() {
 
     // Initial load
     const urlParams = new URLSearchParams(window.location.search);
-    const unitParam = urlParams.get('unit');
-    if (unitParam && (unitParam === 'flaskapp' || unitParam === 'dashboard')) {
+    const unitParam = urlParams.get('unit') || (logsContainer ? logsContainer.getAttribute('data-unit') : 'dashboard');
+    if (unitParam) {
+        let exists = Array.from(serviceSelect.options).some(opt => opt.value === unitParam);
+        if (!exists) {
+            const opt = document.createElement('option');
+            opt.value = unitParam;
+            opt.textContent = (unitParam === 'system' || unitParam === 'syslog') ? 'System Journal (Syslog)' : `${unitParam}.service`;
+            serviceSelect.appendChild(opt);
+        }
         serviceSelect.value = unitParam;
     }
+
+    // Populate full dynamic list of system services in the background
+    loadAvailableServices(unitParam);
 
     fetchLogs().then(() => {
         logsContainer.scrollTop = logsContainer.scrollHeight;
@@ -1116,6 +1211,8 @@ function initServersControl() {
         serverSearch.addEventListener('input', renderServerGrid);
     }
 
+    // Initial load for server fleet page
+    loadActiveServer();
 }
 
 
