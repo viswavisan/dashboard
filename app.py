@@ -1,5 +1,7 @@
 import os
 import re
+import io
+import uuid
 import json
 import time
 import socket
@@ -22,6 +24,31 @@ class WerkzeugFilter(logging.Filter):
 
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.addFilter(WerkzeugFilter())
+
+# In-memory store for session private keys (never saved to disk)
+# Map: session_id -> { "key_content": str, "key_name": str, "updated_at": float }
+_SESSION_KEYS = {}
+
+
+def load_key_from_string(key_text, passphrase=None):
+    """Parses a private key string (RSA, Ed25519, ECDSA, DSS) using Paramiko in memory without disk writes."""
+    if not key_text or not key_text.strip():
+        raise ValueError("Private key content is empty.")
+
+    cleaned = key_text.strip()
+    pwd = passphrase.strip() if (passphrase and str(passphrase).strip()) else None
+
+    # Try all standard Paramiko key classes
+    for key_cls in (paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey):
+        try:
+            buf = io.StringIO(cleaned)
+            return key_cls.from_private_key(buf, password=pwd)
+        except paramiko.PasswordRequiredException:
+            raise ValueError("Private key is encrypted with a passphrase. Please provide the key passphrase.")
+        except Exception:
+            continue
+
+    raise ValueError("Invalid private key format. Ensure it is a valid PEM/OpenSSH private key format.")
 
 
 def normalize_key_path(p):
@@ -48,23 +75,37 @@ def require_connection():
         return redirect('/login')
 
 
-def test_ssh_connection(host, username, port, key_path):
-    """Test SSH connection to remote host."""
-    expanded_key = normalize_key_path(key_path)
-    if not os.path.exists(expanded_key):
-        return False, f"Key file not found at: {expanded_key}"
-
+def test_ssh_connection(host, username, port, key_path=None, key_content=None, passphrase=None):
+    """Test SSH connection to remote host using either in-memory key or disk key file."""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            hostname=host.strip(),
-            port=int(port),
-            username=username.strip(),
-            key_filename=expanded_key,
-            timeout=8,
-            banner_timeout=8
-        )
+        if key_content and key_content.strip():
+            pkey = load_key_from_string(key_content, passphrase)
+            client.connect(
+                hostname=host.strip(),
+                port=int(port),
+                username=username.strip(),
+                pkey=pkey,
+                timeout=8,
+                banner_timeout=8
+            )
+        elif key_path and key_path.strip():
+            expanded_key = normalize_key_path(key_path)
+            if not os.path.exists(expanded_key):
+                return False, f"Key file not found at: {expanded_key}"
+            client.connect(
+                hostname=host.strip(),
+                port=int(port),
+                username=username.strip(),
+                key_filename=expanded_key,
+                password=passphrase.strip() if (passphrase and str(passphrase).strip()) else None,
+                timeout=8,
+                banner_timeout=8
+            )
+        else:
+            return False, "No private key provided (neither in-memory content nor file path)."
+
         client.close()
         return True, "Success"
     except Exception as e:
@@ -77,22 +118,40 @@ def get_ssh_client():
     if not conn or not conn.get('host'):
         return None, "No active remote host connection."
 
-    key_path = normalize_key_path(conn.get('key_path', ''))
-    if not os.path.exists(key_path):
-        return None, f"Private key file not found: {key_path}"
+    session_id = session.get('session_id')
+    key_info = _SESSION_KEYS.get(session_id) if session_id else None
+    passphrase = conn.get('passphrase')
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            hostname=conn['host'].strip(),
-            port=int(conn.get('port', 22)),
-            username=conn.get('username', 'opc').strip(),
-            key_filename=key_path,
-            timeout=8,
-            banner_timeout=8
-        )
-        return client, None
+        if key_info and key_info.get('key_content'):
+            pkey = load_key_from_string(key_info['key_content'], passphrase)
+            client.connect(
+                hostname=conn['host'].strip(),
+                port=int(conn.get('port', 22)),
+                username=conn.get('username', 'opc').strip(),
+                pkey=pkey,
+                timeout=8,
+                banner_timeout=8
+            )
+            return client, None
+        elif conn.get('key_path'):
+            key_path = normalize_key_path(conn.get('key_path', ''))
+            if not os.path.exists(key_path):
+                return None, f"Private key file not found: {key_path}"
+            client.connect(
+                hostname=conn['host'].strip(),
+                port=int(conn.get('port', 22)),
+                username=conn.get('username', 'opc').strip(),
+                key_filename=key_path,
+                password=passphrase.strip() if (passphrase and str(passphrase).strip()) else None,
+                timeout=8,
+                banner_timeout=8
+            )
+            return client, None
+        else:
+            return None, "No SSH key found for this active session."
     except Exception as e:
         return None, f"SSH connection to {conn['host']} failed: {str(e)}"
 
@@ -105,8 +164,14 @@ def run_remote_command(cmd, sudo=False, custom_sudo_password=None):
 
     client, err = get_ssh_client()
     if err:
-        # Fallback to OpenSSH CLI
-        key_path = os.path.expanduser(conn.get('key_path', ''))
+        # Fallback to OpenSSH CLI only if key exists on disk
+        raw_key_path = conn.get('key_path', '')
+        if not raw_key_path:
+            return "", err, 1
+        key_path = normalize_key_path(raw_key_path)
+        if not os.path.exists(key_path):
+            return "", err, 1
+
         host = conn['host']
         user = conn.get('username', 'opc')
         port = str(conn.get('port', 22))
@@ -254,22 +319,53 @@ def api_login():
     username = str(data.get('username', 'opc')).strip()
     port = int(data.get('port', 22))
     key_path = str(data.get('key_path', '')).strip().strip('"').strip("'")
+    key_content = str(data.get('key_content', '')).strip()
+    key_name = str(data.get('key_name', '')).strip()
+    passphrase = str(data.get('passphrase', '')).strip()
     sudo_password = str(data.get('sudo_password', ''))
 
-    if not host or not username or not key_path:
-        return jsonify({"status": "error", "message": "Host, username, and key path are required."}), 400
+    if not host or not username:
+        return jsonify({"status": "error", "message": "Host and username are required."}), 400
+
+    if not key_content and not key_path:
+        return jsonify({"status": "error", "message": "Private SSH key is required (upload file, paste content, or enter file path)."}), 400
 
     # Test the SSH connection
-    ok, err = test_ssh_connection(host, username, port, key_path)
+    ok, err = test_ssh_connection(
+        host=host,
+        username=username,
+        port=port,
+        key_path=key_path if not key_content else None,
+        key_content=key_content if key_content else None,
+        passphrase=passphrase
+    )
     if not ok:
         return jsonify({"status": "error", "message": f"Connection failed: {err}"}), 400
+
+    # Ensure session has unique ID
+    if 'session_id' not in session:
+        session['session_id'] = str(uuid.uuid4())
+    session_id = session['session_id']
+
+    # Store key strictly in server RAM (never on disk, never in client cookie)
+    if key_content:
+        _SESSION_KEYS[session_id] = {
+            'key_content': key_content,
+            'key_name': key_name or "Uploaded In-Memory Key",
+            'updated_at': time.time()
+        }
+    else:
+        _SESSION_KEYS.pop(session_id, None)
 
     conn_data = {
         'host': host,
         'username': username,
         'port': port,
-        'key_path': key_path,
-        'sudo_password': sudo_password
+        'key_path': key_path if not key_content else '',
+        'key_name': key_name or (os.path.basename(key_path) if key_path else "In-Memory Key"),
+        'has_in_memory_key': bool(key_content),
+        'sudo_password': sudo_password,
+        'passphrase': passphrase
     }
     session['oci_conn'] = conn_data
 
@@ -279,7 +375,10 @@ def api_login():
 
 @app.route('/logout')
 def logout():
-    session.pop('oci_conn', None)
+    session_id = session.get('session_id')
+    if session_id:
+        _SESSION_KEYS.pop(session_id, None)
+    session.clear()
     return redirect('/login')
 
 
@@ -537,6 +636,8 @@ def api_active_server():
         "username": conn.get('username', ''),
         "port": conn.get('port', 22),
         "key_path": conn.get('key_path', ''),
+        "key_name": conn.get('key_name', 'In-Memory Key'),
+        "has_in_memory_key": conn.get('has_in_memory_key', False),
         "hostname": get_display_hostname()
     })
 

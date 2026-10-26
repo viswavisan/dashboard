@@ -931,8 +931,8 @@ function initServersControl() {
                         </div>
 
                         <div class="server-meta-row">
-                            <span class="s-label">Key File</span>
-                            <span class="s-value font-mono key-path-truncate" title="${s.key_path || ''}">${s.key_path ? s.key_path.split('\\').pop().split('/').pop() : 'None'}</span>
+                            <span class="s-label">Key</span>
+                            <span class="s-value font-mono key-path-truncate" title="${s.key_name || s.key_path || 'In-Memory Key'}">${s.key_name || (s.key_path ? s.key_path.split('\\').pop().split('/').pop() : (s.key_content ? 'In-Memory Key' : 'None'))}</span>
                         </div>
                     </div>
 
@@ -986,7 +986,10 @@ function initServersControl() {
                     host: s.host,
                     port: s.port || 22,
                     username: s.username,
-                    key_path: s.key_path,
+                    key_path: s.key_path || '',
+                    key_content: s.key_content || '',
+                    key_name: s.key_name || '',
+                    passphrase: s.passphrase || '',
                     sudo_password: s.sudo_password || ''
                 })
             });
@@ -1017,7 +1020,7 @@ function initServersControl() {
         inputHost.value = s.host || '';
         inputPort.value = s.port || 22;
         inputUser.value = s.username || 'opc';
-        inputKey.value = s.key_path || '';
+        inputKey.value = s.key_path || (s.key_content ? `[In-Memory Key: ${s.key_name || 'Uploaded'}]` : '');
         inputSudo.value = s.sudo_password || '';
 
         modal.style.display = 'flex';
@@ -1069,26 +1072,36 @@ function initServersControl() {
             const host = inputHost.value.trim();
             const port = parseInt(inputPort.value, 10) || 22;
             const user = inputUser.value.trim();
-            const key = inputKey.value.trim();
+            const keyVal = inputKey.value.trim();
             const sudo = inputSudo.value;
 
-            if (!newName || !host || !user || !key) {
-                alert('Please fill in Name, Host, Username, and Key Path.');
+            if (!newName || !host || !user) {
+                alert('Please fill in Name, Host, and Username.');
                 return;
             }
 
             const sessions = getSavedSessions();
+            const existing = (origName && sessions[origName]) ? sessions[origName] : {};
+
             // If renamed, remove old key
             if (origName && origName !== newName) {
                 delete sessions[origName];
             }
+
+            const isMemoryPlaceholder = keyVal.startsWith('[In-Memory');
+            const finalKeyPath = isMemoryPlaceholder ? '' : keyVal;
+            const finalKeyContent = isMemoryPlaceholder ? (existing.key_content || '') : (keyVal ? '' : (existing.key_content || ''));
+            const finalKeyName = isMemoryPlaceholder ? (existing.key_name || 'In-Memory Key') : (keyVal ? keyVal.split(/[/\\]/).pop() : (existing.key_name || 'In-Memory Key'));
 
             sessions[newName] = {
                 name: newName,
                 host: host,
                 port: port,
                 username: user,
-                key_path: key,
+                key_path: finalKeyPath,
+                key_content: finalKeyContent,
+                key_name: finalKeyName,
+                passphrase: existing.passphrase || '',
                 sudo_password: sudo
             };
 
