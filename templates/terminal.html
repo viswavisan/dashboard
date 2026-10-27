@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 
-{% block title %}Interactive Terminal - System Dashboard{% endblock %}
+{% block title %}Interactive Terminal - Host Pilot{% endblock %}
 
 {% block page_title %}Terminal Console{% endblock %}
 {% block page_desc %}Cockpit-grade interactive pseudo-terminal (PTY) with real-time WebSocket streaming.{% endblock %}
@@ -12,6 +12,15 @@
         <span class="status-indicator-dot" id="ws-status-dot" style="background: #eab308; box-shadow: 0 0 8px #eab308;"></span>
         <span id="ws-status-text" style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">Connecting...</span>
     </div>
+
+    <!-- Paste Button -->
+    <button id="terminal-paste-btn" class="btn btn-secondary btn-sm" title="Paste clipboard into terminal (Ctrl+V or Right-Click)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+            <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+        </svg>
+        <span>Paste</span>
+    </button>
 
     <!-- Reconnect Button -->
     <button id="terminal-reconnect-btn" class="btn btn-secondary btn-sm" title="Reconnect WebSocket session" style="display: none;">
@@ -241,12 +250,41 @@
         const statusText = document.getElementById('ws-status-text');
         const reconnectBtn = document.getElementById('terminal-reconnect-btn');
         const clearBtn = document.getElementById('terminal-clear-btn');
+        const pasteBtn = document.getElementById('terminal-paste-btn');
         const snippetButtons = document.querySelectorAll('.btn-snippet');
 
         let term = null;
         let fitAddon = null;
         let ws = null;
         let isConnected = false;
+
+        async function copySelectedText() {
+            if (term && term.hasSelection()) {
+                const selected = term.getSelection();
+                try {
+                    await navigator.clipboard.writeText(selected);
+                } catch (err) {
+                    console.warn('Clipboard write failed:', err);
+                }
+            }
+        }
+
+        async function pasteFromClipboard() {
+            try {
+                const text = await navigator.clipboard.readText();
+                if (text && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(text);
+                    if (term) term.focus();
+                }
+            } catch (err) {
+                // Fallback prompt if browser restricts clipboard reading
+                const fallback = prompt("Paste text to send to terminal:", "");
+                if (fallback !== null && fallback !== "" && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(fallback);
+                    if (term) term.focus();
+                }
+            }
+        }
 
         function setStatus(state, label) {
             statusText.textContent = label;
@@ -308,6 +346,61 @@
 
             term.open(container);
             fitAddon.fit();
+
+            // Keyboard shortcut handler for Copy & Paste
+            term.attachCustomKeyEventHandler(event => {
+                // 1. Paste: Ctrl+V, Cmd+V, Ctrl+Shift+V, Shift+Insert
+                if (((event.ctrlKey || event.metaKey) && (event.key === 'v' || event.key === 'V')) || 
+                    (event.shiftKey && event.key === 'Insert')) {
+                    if (event.type === 'keydown') {
+                        pasteFromClipboard();
+                    }
+                    return false; // Intercept: prevent terminal from sending raw ASCII \x16 character
+                }
+
+                // 2. Copy: Ctrl+C or Cmd+C when text is selected
+                if ((event.ctrlKey || event.metaKey) && (event.key === 'c' || event.key === 'C')) {
+                    if (term.hasSelection()) {
+                        if (event.type === 'keydown') {
+                            copySelectedText();
+                        }
+                        return false;
+                    }
+                    // No selection: let Ctrl+C pass through to send SIGINT (\x03) to bash
+                    return true;
+                }
+
+                // 3. Copy: Ctrl+Shift+C
+                if ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === 'c' || event.key === 'C')) {
+                    if (event.type === 'keydown') {
+                        copySelectedText();
+                    }
+                    return false;
+                }
+
+                return true;
+            });
+
+            // Right-click in terminal: Copy if selection exists, otherwise Paste clipboard
+            const terminalScreen = document.getElementById('terminal-screen');
+            if (terminalScreen) {
+                terminalScreen.addEventListener('contextmenu', async (e) => {
+                    e.preventDefault();
+                    if (term && term.hasSelection()) {
+                        await copySelectedText();
+                        term.clearSelection();
+                    } else {
+                        await pasteFromClipboard();
+                    }
+                });
+            }
+
+            // Paste button click listener
+            if (pasteBtn) {
+                pasteBtn.addEventListener('click', () => {
+                    pasteFromClipboard();
+                });
+            }
 
             // Send keyboard inputs to WebSocket
             term.onData(data => {

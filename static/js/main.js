@@ -35,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initLogsControl();
     initServersControl();
     initFilesControl();
+    initUsersControl();
 });
 
 // Helper: Format bytes to human readable sizes
@@ -45,6 +46,17 @@ function formatBytes(bytes, decimals = 2) {
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+// Helper: Escape HTML string to prevent XSS
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 
@@ -398,18 +410,14 @@ function initMemoryControl() {
             if (!response.ok) throw new Error('Query error');
             const data = await response.json();
 
-            // 1. System Vitals Banner: Public IP, Hostname, Uptime, Load Average
-            const vitalIp = document.getElementById('vital-ip');
-            const vitalUptime = document.getElementById('vital-uptime');
-            const vitalLoadAvg = document.getElementById('vital-loadavg');
-            const vitalHostname = document.getElementById('vital-hostname');
-
-            if (vitalIp && data.public_ip) vitalIp.textContent = data.public_ip;
-            if (vitalUptime && data.uptime) vitalUptime.textContent = data.uptime;
-            if (vitalLoadAvg && data.load_average) {
-                vitalLoadAvg.textContent = data.load_average.map(v => typeof v === 'number' ? v.toFixed(2) : v).join(', ');
-            }
-            if (vitalHostname && data.hostname) vitalHostname.textContent = data.hostname;
+            // Update sidebar & mobile brand dynamically
+            const sidebarIp = document.getElementById('sidebar-brand-ip');
+            const sidebarHostname = document.getElementById('sidebar-brand-hostname');
+            const mobileBrandIp = document.getElementById('mobile-brand-ip');
+            const loginHost = data.login_host || data.public_ip;
+            if (sidebarIp && loginHost) sidebarIp.textContent = loginHost;
+            if (sidebarHostname && data.hostname) sidebarHostname.textContent = data.hostname;
+            if (mobileBrandIp && loginHost) mobileBrandIp.textContent = loginHost;
 
             // 2. CPU Utilization Details
             const cpuPctEl = document.getElementById('cpu-pct');
@@ -890,7 +898,15 @@ function initServersControl() {
     const inputKey = document.getElementById('server-key');
     const inputSudo = document.getElementById('server-sudo');
 
+    const refreshServerBtn = document.getElementById('btn-refresh-server');
     let activeHostInfo = null;
+
+    if (refreshServerBtn) {
+        refreshServerBtn.addEventListener('click', () => {
+            loadActiveServer();
+            showGlobalToast('Refreshing server details...');
+        });
+    }
 
     function getSavedSessions() {
         try {
@@ -911,37 +927,116 @@ function initServersControl() {
     }
 
     async function loadActiveServer() {
-        try {
-            const res = await fetch('/api/servers/active');
-            if (res.ok) {
-                const data = await res.json();
-                if (data.status === 'success') {
-                    activeHostInfo = data;
-                    const ipEl = document.getElementById('active-host-ip');
-                    const nameEl = document.getElementById('active-host-name');
-                    if (ipEl && data.host) ipEl.textContent = data.host;
-                    if (nameEl && data.hostname) nameEl.textContent = data.hostname;
+        const refreshIcon = refreshServerBtn ? refreshServerBtn.querySelector('svg') : null;
+        if (refreshIcon) refreshIcon.classList.add('spinning');
 
-                    // If user has no saved sessions yet, seed the current one
-                    const sessions = getSavedSessions();
-                    if (Object.keys(sessions).length === 0 && data.host) {
-                        const seedName = data.hostname && data.hostname !== 'Not Connected' 
-                            ? `OCI Ampere (${data.hostname})` 
-                            : 'OCI Ampere VM';
-                        sessions[seedName] = {
-                            name: seedName,
-                            host: data.host,
-                            port: data.port || 22,
-                            username: data.username || 'opc',
-                            key_path: data.key_path || '',
-                            sudo_password: ''
-                        };
-                        saveSessions(sessions);
-                    }
+        try {
+            const [activeRes, vitalsRes] = await Promise.all([
+                fetch('/api/servers/active'),
+                fetch('/api/system-info')
+            ]);
+            let activeData = {};
+            let vitalsData = {};
+            if (activeRes.ok) activeData = await activeRes.json();
+            if (vitalsRes.ok) vitalsData = await vitalsRes.json();
+
+            activeHostInfo = activeData;
+
+            // Merged data
+            const pubIp = vitalsData.public_ip || activeData.host || '';
+            const privIp = vitalsData.private_ip || (vitalsData.vm_details ? vitalsData.vm_details.primary_private_ip : '') || activeData.private_ip || '';
+            const hname = vitalsData.hostname || activeData.hostname || '';
+            const vm = vitalsData.vm_details || activeData.vm_details || {};
+
+            // 1. Update Active Server Status card
+            const ipEl = document.getElementById('active-host-ip');
+            const privIpEl = document.getElementById('active-host-private-ip');
+            const nameEl = document.getElementById('active-host-name');
+            const userPortEl = document.getElementById('active-host-user-port');
+            const activeOsBadge = document.getElementById('active-os-badge');
+
+            if (ipEl && pubIp) ipEl.textContent = pubIp;
+            if (privIpEl) privIpEl.textContent = privIp || 'None detected';
+            if (nameEl && hname) nameEl.textContent = hname;
+            if (userPortEl) userPortEl.textContent = `${activeData.username || 'opc'}@${activeData.login_host || pubIp}:${activeData.port || 22}`;
+            if (activeOsBadge && vm.os_name) activeOsBadge.textContent = vm.os_name;
+
+            // 2. Update VM System & Network Specifications Card
+            const vmOsBadge = document.getElementById('vm-os-badge');
+            const vmVirtBadge = document.getElementById('vm-virt-badge');
+            const specOs = document.getElementById('spec-os');
+            const specKernel = document.getElementById('spec-kernel');
+            const specArch = document.getElementById('spec-arch');
+            const specCpu = document.getElementById('spec-cpu');
+            const specVirt = document.getElementById('spec-virt');
+            const specPublicIp = document.getElementById('spec-public-ip');
+            const specPrivateIp = document.getElementById('spec-private-ip');
+            const specGateway = document.getElementById('spec-gateway');
+            const specDns = document.getElementById('spec-dns');
+            const specInterfaces = document.getElementById('spec-interfaces');
+
+            if (vmOsBadge && vm.os_name) vmOsBadge.textContent = vm.os_name;
+            if (vmVirtBadge) vmVirtBadge.textContent = vm.virtualization || 'Cloud VM';
+            if (specOs) specOs.textContent = vm.os_name || 'Linux';
+            if (specKernel) specKernel.textContent = vm.kernel || '—';
+            if (specArch) specArch.textContent = vm.arch || '—';
+            if (specCpu) {
+                const cores = vitalsData.cpu ? vitalsData.cpu.cores : 1;
+                specCpu.textContent = vm.cpu_model ? `${vm.cpu_model} (${cores} vCPUs)` : `${cores} vCPUs`;
+            }
+            if (specVirt) specVirt.textContent = vm.virtualization || 'Cloud / KVM';
+            if (specPublicIp) specPublicIp.textContent = pubIp || '—';
+            if (specPrivateIp) {
+                const privList = (vm.private_ips && vm.private_ips.length) ? vm.private_ips.join(', ') : (privIp || '—');
+                specPrivateIp.textContent = privList;
+            }
+            if (specGateway) specGateway.textContent = vm.gateway || '—';
+            if (specDns) specDns.textContent = (vm.dns_servers && vm.dns_servers.length) ? vm.dns_servers.join(', ') : '—';
+
+            if (specInterfaces) {
+                if (vm.interfaces && vm.interfaces.length) {
+                    specInterfaces.innerHTML = vm.interfaces.map(iface => {
+                        const ipsStr = iface.ips.length ? iface.ips.join(', ') : 'No IPv4';
+                        return `<span class="badge badge-secondary font-mono" style="font-size: 0.72rem; text-transform: none;">
+                            <strong style="color: var(--accent-cyan);">${escapeHtml(iface.name)}</strong>: ${escapeHtml(ipsStr)} (${escapeHtml(iface.state)})
+                        </span>`;
+                    }).join(' ');
+                } else if (privIp) {
+                    specInterfaces.innerHTML = `<span class="badge badge-secondary font-mono">${escapeHtml(privIp)}</span>`;
+                } else {
+                    specInterfaces.textContent = 'None detected';
                 }
+            }
+
+            // 3. Update Global Sidebar and Mobile Header
+            const sidebarIp = document.getElementById('sidebar-brand-ip');
+            const sidebarHostname = document.getElementById('sidebar-brand-hostname');
+            const mobileBrandIp = document.getElementById('mobile-brand-ip');
+            const loginHost = activeData.login_host || activeData.host || pubIp;
+            if (sidebarIp && loginHost) sidebarIp.textContent = loginHost;
+            if (sidebarHostname && hname) sidebarHostname.textContent = hname;
+            if (mobileBrandIp && loginHost) mobileBrandIp.textContent = loginHost;
+
+            // 4. Seed session if user has no saved sessions yet
+            const sessions = getSavedSessions();
+            if (Object.keys(sessions).length === 0 && pubIp) {
+                const seedName = hname && hname !== 'Not Connected' 
+                    ? `Server (${hname})` 
+                    : 'Primary Server';
+                sessions[seedName] = {
+                    name: seedName,
+                    host: pubIp,
+                    port: activeData.port || 22,
+                    username: activeData.username || 'opc',
+                    key_path: activeData.key_path || '',
+                    sudo_password: ''
+                };
+                saveSessions(sessions);
             }
         } catch (e) {
             console.error('Failed to query active server:', e);
+        } finally {
+            if (refreshIcon) refreshIcon.classList.remove('spinning');
         }
         renderServerGrid();
     }
@@ -1090,9 +1185,9 @@ function initServersControl() {
             });
             const data = await res.json();
             if (res.ok && data.status === 'success') {
-                showGlobalToast(`Connected to ${name}! Loading vitals...`);
+                showGlobalToast(`Connected to ${name}! Loading server details...`);
                 setTimeout(() => {
-                    window.location.href = '/memory';
+                    window.location.href = '/servers';
                 }, 600);
             } else {
                 alert(`Connection failed: ${data.message || 'Unknown error'}`);
@@ -1768,6 +1863,607 @@ function initFilesControl() {
 
     // Initial load
     navigateToDir(currentDir);
+}
+
+
+// ==========================================
+// 7. USER ACCOUNTS CONTROLLER
+// ==========================================
+function initUsersControl() {
+    const usersList = document.getElementById('users-list');
+    if (!usersList) return; // Not on User Accounts page
+
+    const searchInput = document.getElementById('users-search');
+    const filterSelect = document.getElementById('user-type-filter');
+    const refreshBtn = document.getElementById('refresh-users-btn');
+    const autoRefreshCb = document.getElementById('auto-refresh-users');
+    const countBadge = document.getElementById('users-count');
+    const statusMsg = document.getElementById('users-status-msg');
+
+    // Stats
+    const statStandard = document.getElementById('stat-standard-users');
+    const statAdmin = document.getElementById('stat-admin-users');
+    const statLocked = document.getElementById('stat-locked-users');
+    const statSessions = document.getElementById('stat-active-sessions');
+
+    // Modals & Controls
+    const addUserBtn = document.getElementById('add-user-btn');
+    const addModal = document.getElementById('add-user-modal');
+    const closeAddModal = document.getElementById('close-add-modal');
+    const cancelAddModal = document.getElementById('cancel-add-modal');
+    const addUserForm = document.getElementById('add-user-form');
+    const addUserError = document.getElementById('add-user-error');
+    const submitAddBtn = document.getElementById('submit-add-btn');
+
+    const pwdModal = document.getElementById('change-pwd-modal');
+    const closePwdModal = document.getElementById('close-pwd-modal');
+    const cancelPwdModal = document.getElementById('cancel-pwd-modal');
+    const pwdForm = document.getElementById('change-pwd-form');
+    const pwdError = document.getElementById('change-pwd-error');
+    const submitPwdBtn = document.getElementById('submit-pwd-btn');
+    const pwdTargetUsername = document.getElementById('pwd-target-username');
+    const pwdUserDisplay = document.getElementById('pwd-user-display');
+    const pwdNew = document.getElementById('pwd-new');
+    const pwdConfirm = document.getElementById('pwd-confirm');
+    const pwdForceChange = document.getElementById('pwd-force-change');
+
+    const keysModal = document.getElementById('ssh-keys-modal');
+    const closeKeysModal = document.getElementById('close-keys-modal');
+    const cancelKeysModal = document.getElementById('cancel-keys-modal');
+    const keysForm = document.getElementById('ssh-keys-form');
+    const keysError = document.getElementById('ssh-keys-error');
+    const submitKeysBtn = document.getElementById('submit-keys-btn');
+    const keysTargetUsername = document.getElementById('keys-target-username');
+    const keysUserDisplay = document.getElementById('keys-user-display');
+    const keysCountDisplay = document.getElementById('keys-count-display');
+    const keysText = document.getElementById('ssh-keys-text');
+
+    const deleteModal = document.getElementById('delete-user-modal');
+    const closeDeleteModal = document.getElementById('close-delete-modal');
+    const cancelDeleteModal = document.getElementById('cancel-delete-modal');
+    const deleteForm = document.getElementById('delete-user-form');
+    const deleteError = document.getElementById('delete-user-error');
+    const submitDeleteBtn = document.getElementById('submit-delete-btn');
+    const deleteTargetUsername = document.getElementById('delete-target-username');
+    const deleteUserDisplay = document.getElementById('delete-user-display');
+    const deleteHomePath = document.getElementById('delete-home-path');
+    const deleteRemoveHome = document.getElementById('delete-remove-home');
+
+    let usersCache = [];
+    let currentUsername = '';
+    let adminGroupName = 'sudo';
+    let autoRefreshTimer = null;
+
+    async function fetchUsers() {
+        const refreshIcon = refreshBtn ? refreshBtn.querySelector('svg') : null;
+        if (refreshIcon) refreshIcon.classList.add('spinning');
+        statusMsg.textContent = 'Inspecting system accounts...';
+
+        try {
+            const res = await authenticatedFetch('/api/users');
+            if (res.status === 401) return; // handled by authenticatedFetch
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.message || 'Failed to retrieve accounts');
+            }
+
+            const data = await res.json();
+            usersCache = data.users || [];
+            currentUsername = data.current_user || '';
+            adminGroupName = data.admin_group || 'sudo';
+
+            updateStats();
+            renderUsers();
+
+            const timestamp = new Date().toTimeString().split(' ')[0];
+            statusMsg.textContent = `Synced at ${timestamp}`;
+        } catch (err) {
+            statusMsg.textContent = `Sync Error: ${err.message}`;
+        } finally {
+            if (refreshIcon) refreshIcon.classList.remove('spinning');
+        }
+    }
+
+    function updateStats() {
+        const standardCount = usersCache.filter(u => !u.is_system || u.is_root).length;
+        const adminCount = usersCache.filter(u => u.is_admin).length;
+        const lockedCount = usersCache.filter(u => u.is_locked).length;
+        const sessionCount = usersCache.filter(u => u.is_logged_in).length;
+
+        if (statStandard) statStandard.textContent = standardCount;
+        if (statAdmin) statAdmin.textContent = adminCount;
+        if (statLocked) statLocked.textContent = lockedCount;
+        if (statSessions) statSessions.textContent = sessionCount;
+    }
+
+    function renderUsers() {
+        const query = (searchInput ? searchInput.value : '').toLowerCase().trim();
+        const filterVal = filterSelect ? filterSelect.value : 'standard';
+
+        let filtered = usersCache.filter(u => {
+            // Type filter
+            if (filterVal === 'standard' && (u.is_system && !u.is_root)) return false;
+            if (filterVal === 'admin' && !u.is_admin) return false;
+            if (filterVal === 'system' && (!u.is_system || u.is_root)) return false;
+
+            // Search query
+            if (query) {
+                const matchName = u.username.toLowerCase().includes(query);
+                const matchFull = (u.fullname || '').toLowerCase().includes(query);
+                const matchUid = String(u.uid).includes(query);
+                const matchShell = (u.shell || '').toLowerCase().includes(query);
+                return matchName || matchFull || matchUid || matchShell;
+            }
+            return true;
+        });
+
+        if (countBadge) {
+            countBadge.textContent = `${filtered.length} Account${filtered.length === 1 ? '' : 's'}`;
+        }
+
+        if (filtered.length === 0) {
+            usersList.innerHTML = `
+                <tr>
+                    <td colspan="7" style="text-align: center; padding: 40px; color: var(--text-muted);">
+                        No user accounts matched the filter or search criteria.
+                    </td>
+                </tr>`;
+            return;
+        }
+
+        usersList.innerHTML = filtered.map(u => {
+            const initials = u.username.substring(0, 2).toUpperCase();
+            const isCurrent = u.username === currentUsername;
+            
+            // Avatar style
+            let avatarClass = 'user-avatar';
+            if (u.is_root) avatarClass += ' root';
+            else if (u.is_admin) avatarClass += ' admin';
+            else if (u.is_locked) avatarClass += ' locked';
+
+            // Role badge
+            let roleBadge = '';
+            if (u.is_root) {
+                roleBadge = `<span class="badge" style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5;">ROOT</span>`;
+            } else if (u.is_admin) {
+                roleBadge = `<span class="badge badge-primary">ADMIN (${adminGroupName.toUpperCase()})</span>`;
+            } else if (u.is_system) {
+                roleBadge = `<span class="badge badge-secondary" style="opacity: 0.65;">SYSTEM</span>`;
+            } else {
+                roleBadge = `<span class="badge badge-secondary">STANDARD</span>`;
+            }
+
+            // Status badge
+            const statusBadge = u.is_locked
+                ? `<span class="badge badge-warning">LOCKED</span>`
+                : `<span class="badge badge-success">ACTIVE</span>`;
+
+            // Active session pulse
+            const sessionIndicator = u.is_logged_in
+                ? `<span class="pulse-session-dot" title="Active logged-in session"></span>`
+                : '';
+
+            const currentTag = isCurrent
+                ? `<span class="current-user-tag">CURRENT SESSION</span>`
+                : '';
+
+            const disabledAttr = (isCurrent || u.is_root) ? 'disabled' : '';
+
+            return `
+                <tr>
+                    <td>
+                        <div class="user-info-cell">
+                            <div class="${avatarClass}">${initials}</div>
+                            <div class="user-details">
+                                <div class="user-name-row">
+                                    <span class="user-username">${escapeHtml(u.username)}</span>
+                                    ${sessionIndicator}
+                                    ${currentTag}
+                                </div>
+                                <div class="user-fullname">${escapeHtml(u.fullname || '—')}</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td>${roleBadge}</td>
+                    <td>${statusBadge}</td>
+                    <td>
+                        <span class="font-mono" style="font-size: 0.84rem; color: var(--text-main);">
+                            ${u.uid} <span style="opacity: 0.35;">/</span> ${u.gid}
+                        </span>
+                    </td>
+                    <td>
+                        <div class="font-mono" style="font-size: 0.82rem; color: #fff;">${escapeHtml(u.home)}</div>
+                        <div class="font-mono" style="font-size: 0.74rem; color: var(--text-muted);">${escapeHtml(u.shell)}</div>
+                    </td>
+                    <td>
+                        <button type="button" class="badge badge-secondary ssh-badge-clickable" onclick="window.openSshKeysModal('${escapeHtml(u.username)}')" title="Manage SSH Authorized Keys">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 3px;">
+                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                            </svg>
+                            ${u.ssh_keys_count || 0} Key${u.ssh_keys_count === 1 ? '' : 's'}
+                        </button>
+                    </td>
+                    <td style="text-align: right;">
+                        <div class="action-btn-group">
+                            <button type="button" class="btn-action-icon" title="Change Password" onclick="window.openChangePwdModal('${escapeHtml(u.username)}')">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 2l-2 2m-1.5 1.5L16 7l-4 4-2-2-4 4 2 2-3 3v2h2l3-3 2 2 4-4-2-2 4-4 1.5-1.5L21 2z"></path>
+                                </svg>
+                            </button>
+                            <button type="button" class="btn-action-icon" title="Manage SSH Keys" onclick="window.openSshKeysModal('${escapeHtml(u.username)}')">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                </svg>
+                            </button>
+                            <button type="button" class="btn-action-icon ${u.is_admin ? 'admin-active' : ''}" 
+                                title="${u.is_admin ? 'Revoke Administrator Privileges' : 'Grant Administrator Privileges'}" 
+                                onclick="window.toggleUserAdmin('${escapeHtml(u.username)}', ${!u.is_admin})" 
+                                ${disabledAttr}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                </svg>
+                            </button>
+                            <button type="button" class="btn-action-icon ${u.is_locked ? 'locked-active' : ''}" 
+                                title="${u.is_locked ? 'Unlock Account' : 'Lock Account'}" 
+                                onclick="window.toggleUserLock('${escapeHtml(u.username)}', '${u.is_locked ? 'unlock' : 'lock'}')" 
+                                ${disabledAttr}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                    <path d="${u.is_locked ? 'M7 11V7a5 5 0 0 1 10 0v4' : 'M7 11V7a5 5 0 0 1 9.9-1'}"></path>
+                                </svg>
+                            </button>
+                            <button type="button" class="btn-action-icon btn-danger-icon" 
+                                title="Delete Account" 
+                                onclick="window.openDeleteUserModal('${escapeHtml(u.username)}', '${escapeHtml(u.home)}')" 
+                                ${disabledAttr}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // Modal Global Functions
+    window.openChangePwdModal = function(username) {
+        if (!pwdModal) return;
+        pwdTargetUsername.value = username;
+        pwdUserDisplay.textContent = username;
+        pwdNew.value = '';
+        pwdConfirm.value = '';
+        pwdForceChange.checked = false;
+        pwdError.style.display = 'none';
+        pwdModal.style.display = 'flex';
+        pwdNew.focus();
+    };
+
+    window.openSshKeysModal = async function(username) {
+        if (!keysModal) return;
+        keysTargetUsername.value = username;
+        keysUserDisplay.textContent = username;
+        keysCountDisplay.textContent = 'loading...';
+        keysText.value = 'Retrieving authorized keys...';
+        keysText.disabled = true;
+        keysError.style.display = 'none';
+        keysModal.style.display = 'flex';
+
+        try {
+            const res = await authenticatedFetch('/api/users/ssh-keys', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username, action: 'get' })
+            });
+            const data = await res.json();
+            if (res.ok && data.status === 'success') {
+                const keys = data.keys || '';
+                keysText.value = keys;
+                keysText.disabled = false;
+                const count = keys.split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).length;
+                keysCountDisplay.textContent = `${count} key${count === 1 ? '' : 's'}`;
+            } else {
+                keysError.textContent = data.message || 'Failed to read keys';
+                keysError.style.display = 'block';
+                keysText.disabled = false;
+            }
+        } catch (err) {
+            keysError.textContent = `Error: ${err.message}`;
+            keysError.style.display = 'block';
+            keysText.disabled = false;
+        }
+    };
+
+    window.openDeleteUserModal = function(username, homeDir) {
+        if (!deleteModal) return;
+        deleteTargetUsername.value = username;
+        deleteUserDisplay.textContent = username;
+        deleteHomePath.textContent = homeDir || `/home/${username}`;
+        deleteRemoveHome.checked = false;
+        deleteError.style.display = 'none';
+        deleteModal.style.display = 'flex';
+    };
+
+    window.toggleUserLock = async function(username, action) {
+        const confirmMsg = action === 'lock'
+            ? `Are you sure you want to lock login access for "${username}"?`
+            : `Unlock login access for "${username}"?`;
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            const res = await authenticatedFetch('/api/users/toggle-lock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username, action: action })
+            });
+            const data = await res.json();
+            if (res.ok && data.status === 'success') {
+                showGlobalToast(data.message);
+                fetchUsers();
+            } else {
+                alert(`Lock/Unlock failed: ${data.message || 'Unknown error'}`);
+            }
+        } catch (err) {
+            alert(`Error: ${err.message}`);
+        }
+    };
+
+    window.toggleUserAdmin = async function(username, makeAdmin) {
+        const confirmMsg = makeAdmin
+            ? `Grant administrator (sudo/wheel) privileges to "${username}"?`
+            : `Revoke administrator privileges from "${username}"?`;
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            const res = await authenticatedFetch('/api/users/toggle-admin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username, is_admin: makeAdmin })
+            });
+            const data = await res.json();
+            if (res.ok && data.status === 'success') {
+                showGlobalToast(data.message);
+                fetchUsers();
+            } else {
+                alert(`Admin toggle failed: ${data.message || 'Unknown error'}`);
+            }
+        } catch (err) {
+            alert(`Error: ${err.message}`);
+        }
+    };
+
+    // Modal Close Listeners
+    if (closeAddModal) closeAddModal.addEventListener('click', () => addModal.style.display = 'none');
+    if (cancelAddModal) cancelAddModal.addEventListener('click', () => addModal.style.display = 'none');
+
+    if (closePwdModal) closePwdModal.addEventListener('click', () => pwdModal.style.display = 'none');
+    if (cancelPwdModal) cancelPwdModal.addEventListener('click', () => pwdModal.style.display = 'none');
+
+    if (closeKeysModal) closeKeysModal.addEventListener('click', () => keysModal.style.display = 'none');
+    if (cancelKeysModal) cancelKeysModal.addEventListener('click', () => keysModal.style.display = 'none');
+
+    if (closeDeleteModal) closeDeleteModal.addEventListener('click', () => deleteModal.style.display = 'none');
+    if (cancelDeleteModal) cancelDeleteModal.addEventListener('click', () => deleteModal.style.display = 'none');
+
+    // Add User Form Submit
+    if (addUserBtn) {
+        addUserBtn.addEventListener('click', () => {
+            document.getElementById('new-username').value = '';
+            document.getElementById('new-fullname').value = '';
+            document.getElementById('new-password').value = '';
+            document.getElementById('new-shell').value = '/bin/bash';
+            document.getElementById('new-is-admin').checked = false;
+            document.getElementById('new-ssh-key').value = '';
+            addUserError.style.display = 'none';
+            addModal.style.display = 'flex';
+            document.getElementById('new-username').focus();
+        });
+    }
+
+    if (addUserForm) {
+        addUserForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            addUserError.style.display = 'none';
+
+            const username = document.getElementById('new-username').value.trim();
+            const fullname = document.getElementById('new-fullname').value.trim();
+            const password = document.getElementById('new-password').value;
+            const shell = document.getElementById('new-shell').value;
+            const isAdmin = document.getElementById('new-is-admin').checked;
+            const sshKey = document.getElementById('new-ssh-key').value.trim();
+
+            if (!username) return;
+
+            submitAddBtn.disabled = true;
+            submitAddBtn.textContent = 'Creating...';
+
+            try {
+                const res = await authenticatedFetch('/api/users/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: username,
+                        fullname: fullname,
+                        password: password,
+                        shell: shell,
+                        is_admin: isAdmin,
+                        ssh_key: sshKey
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    showGlobalToast(`Created user account "${username}"`);
+                    addModal.style.display = 'none';
+                    fetchUsers();
+                } else {
+                    addUserError.textContent = data.message || 'Failed to create user';
+                    addUserError.style.display = 'block';
+                }
+            } catch (err) {
+                addUserError.textContent = `Error: ${err.message}`;
+                addUserError.style.display = 'block';
+            } finally {
+                submitAddBtn.disabled = false;
+                submitAddBtn.textContent = 'Create User';
+            }
+        });
+    }
+
+    // Change Password Form Submit
+    if (pwdForm) {
+        pwdForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            pwdError.style.display = 'none';
+
+            const username = pwdTargetUsername.value;
+            const p1 = pwdNew.value;
+            const p2 = pwdConfirm.value;
+            const forceChange = pwdForceChange.checked;
+
+            if (p1 !== p2) {
+                pwdError.textContent = 'Passwords do not match.';
+                pwdError.style.display = 'block';
+                return;
+            }
+
+            submitPwdBtn.disabled = true;
+            submitPwdBtn.textContent = 'Updating...';
+
+            try {
+                const res = await authenticatedFetch('/api/users/change-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: username,
+                        password: p1,
+                        force_change: forceChange
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    showGlobalToast(`Password updated for "${username}"`);
+                    pwdModal.style.display = 'none';
+                    fetchUsers();
+                } else {
+                    pwdError.textContent = data.message || 'Failed to update password';
+                    pwdError.style.display = 'block';
+                }
+            } catch (err) {
+                pwdError.textContent = `Error: ${err.message}`;
+                pwdError.style.display = 'block';
+            } finally {
+                submitPwdBtn.disabled = false;
+                submitPwdBtn.textContent = 'Update Password';
+            }
+        });
+    }
+
+    // Save SSH Keys Form Submit
+    if (keysForm) {
+        keysForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            keysError.style.display = 'none';
+
+            const username = keysTargetUsername.value;
+            const keysContent = keysText.value;
+
+            submitKeysBtn.disabled = true;
+            submitKeysBtn.textContent = 'Saving...';
+
+            try {
+                const res = await authenticatedFetch('/api/users/ssh-keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: username,
+                        action: 'save',
+                        keys: keysContent
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    showGlobalToast(`SSH keys updated for "${username}"`);
+                    keysModal.style.display = 'none';
+                    fetchUsers();
+                } else {
+                    keysError.textContent = data.message || 'Failed to save keys';
+                    keysError.style.display = 'block';
+                }
+            } catch (err) {
+                keysError.textContent = `Error: ${err.message}`;
+                keysError.style.display = 'block';
+            } finally {
+                submitKeysBtn.disabled = false;
+                submitKeysBtn.textContent = 'Save SSH Keys';
+            }
+        });
+    }
+
+    // Delete User Form Submit
+    if (deleteForm) {
+        deleteForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            deleteError.style.display = 'none';
+
+            const username = deleteTargetUsername.value;
+            const removeHome = deleteRemoveHome.checked;
+
+            submitDeleteBtn.disabled = true;
+            submitDeleteBtn.textContent = 'Deleting...';
+
+            try {
+                const res = await authenticatedFetch('/api/users/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: username,
+                        remove_home: removeHome
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    showGlobalToast(`Deleted user account "${username}"`);
+                    deleteModal.style.display = 'none';
+                    fetchUsers();
+                } else {
+                    deleteError.textContent = data.message || 'Failed to delete user';
+                    deleteError.style.display = 'block';
+                }
+            } catch (err) {
+                deleteError.textContent = `Error: ${err.message}`;
+                deleteError.style.display = 'block';
+            } finally {
+                submitDeleteBtn.disabled = false;
+                submitDeleteBtn.textContent = 'Confirm Deletion';
+            }
+        });
+    }
+
+    // Filter and search listeners
+    if (searchInput) searchInput.addEventListener('input', renderUsers);
+    if (filterSelect) filterSelect.addEventListener('change', renderUsers);
+
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', fetchUsers);
+    }
+
+    if (autoRefreshCb) {
+        autoRefreshCb.addEventListener('change', () => {
+            if (autoRefreshCb.checked) {
+                autoRefreshTimer = setInterval(fetchUsers, 120000); // 2m
+            } else if (autoRefreshTimer) {
+                clearInterval(autoRefreshTimer);
+                autoRefreshTimer = null;
+            }
+        });
+    }
+
+    // Initial load
+    fetchUsers();
 }
 
 

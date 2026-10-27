@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 
-{% block title %}Memory - System Dashboard{% endblock %}
+{% block title %}Memory - Host Pilot{% endblock %}
 
 {% block page_title %}Memory Utilization{% endblock %}
 {% block page_desc %}Real-time RAM and Swap memory utilization diagnostics.{% endblock %}
@@ -26,80 +26,7 @@
 {% endblock %}
 
 {% block content %}
-<!-- System Vitals Banner: Public IP, Hostname, Uptime, Load Average -->
-<div class="system-vitals-banner dashboard-card">
-    <div class="vital-item">
-        <div class="vital-icon-box cyan">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="2" y1="12" x2="22" y2="12"></line>
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-            </svg>
-        </div>
-        <div class="vital-text">
-            <span class="vital-title">PUBLIC IP</span>
-            <div class="vital-val-group">
-                <span id="vital-ip" class="vital-value font-mono">{{ system_ip }}</span>
-                <button class="btn-copy-mini" onclick="copyToClipboard('{{ system_ip }}')" title="Copy Public IP">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <div class="vital-divider"></div>
-
-    <div class="vital-item">
-        <div class="vital-icon-box amber">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
-        </div>
-        <div class="vital-text">
-            <span class="vital-title">SYSTEM UPTIME</span>
-            <span id="vital-uptime" class="vital-value">Calculating...</span>
-        </div>
-    </div>
-
-    <div class="vital-divider"></div>
-
-    <div class="vital-item">
-        <div class="vital-icon-box purple">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="20" x2="18" y2="10"></line>
-                <line x1="12" y1="20" x2="12" y2="4"></line>
-                <line x1="6" y1="20" x2="6" y2="14"></line>
-            </svg>
-        </div>
-        <div class="vital-text">
-            <span class="vital-title">LOAD AVERAGE (1m / 5m / 15m)</span>
-            <span id="vital-loadavg" class="vital-value font-mono">0.00, 0.00, 0.00</span>
-        </div>
-    </div>
-
-    <div class="vital-divider"></div>
-
-    <div class="vital-item">
-        <div class="vital-icon-box emerald">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-                <line x1="6" y1="6" x2="6.01" y2="6"></line>
-                <line x1="6" y1="18" x2="6.01" y2="18"></line>
-            </svg>
-        </div>
-        <div class="vital-text">
-            <span class="vital-title">REMOTE HOST</span>
-            <span id="vital-hostname" class="vital-value">{{ system_hostname }}</span>
-        </div>
-    </div>
-</div>
-
-<div class="memory-grid" style="margin-top: 24px;">
+<div class="memory-grid">
     <!-- CPU Utilization Card -->
     <div class="dashboard-card memory-card">
         <div class="card-header">

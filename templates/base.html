@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}System Dashboard{% endblock %}</title>
+    <title>{% block title %}{{ app_name or 'Host Pilot' }}{% endblock %}</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,7 +28,10 @@
                     <line x1="3" y1="18" x2="21" y2="18"></line>
                 </svg>
             </button>
-            <div class="mobile-brand">{{ system_ip }}</div>
+            <div class="mobile-brand">
+                <span style="font-family: 'Rajdhani', sans-serif; font-weight: 700; letter-spacing: 1px; color: #fff;">HOST PILOT</span>
+                <span id="mobile-brand-ip" style="font-size: 0.72rem; color: var(--text-muted); margin-left: 6px; font-family: monospace;">{{ login_host or system_ip }}</span>
+            </div>
             <div style="display: flex; align-items: center; gap: 12px;">
                 <div class="status-indicator-dot online"></div>
                 <a href="/logout" title="Disconnect & Switch Host" style="color: var(--text-muted); display: flex; align-items: center;">
@@ -53,9 +56,13 @@
                         <line x1="6" y1="18" x2="6.01" y2="18"></line>
                     </svg>
                 </div>
-                <div class="brand-text">
-                    <h1>{{ system_ip }}</h1>
-                    <span>{{ system_hostname }}</span>
+                <div class="brand-text" style="flex: 1; min-width: 0;">
+                    <h1 style="margin: 0; font-size: 1.2rem; font-weight: 700; letter-spacing: 1.5px; color: #fff;">HOST PILOT</h1>
+                    <div style="display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        <span id="sidebar-brand-ip" class="font-mono" style="color: var(--text-secondary); letter-spacing: 0;">{{ login_host or system_ip }}</span>
+                        <span style="color: var(--text-muted); font-size: 0.65rem;">&bull;</span>
+                        <span id="sidebar-brand-hostname" style="color: var(--text-muted); letter-spacing: 0.5px;">{{ system_hostname }}</span>
+                    </div>
                 </div>
             </div>
 
@@ -72,7 +79,7 @@
                                     <line x1="6" y1="18" x2="6.01" y2="18"></line>
                                 </svg>
                             </span>
-                            <span class="nav-label">Server List</span>
+                            <span class="nav-label">Server Details</span>
                         </a>
                     </li>
                     <li>
@@ -164,6 +171,20 @@
                             <span class="nav-label">File Editor</span>
                         </a>
                     </li>
+                    <li>
+                        <a href="/users" class="nav-link {% if request.path == '/users' %}active{% endif %}">
+                            <span class="nav-icon">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="9" cy="7" r="4"></circle>
+                                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                                </svg>
+                            </span>
+                            <span class="nav-label">User Accounts</span>
+                        </a>
+                    </li>
                 </ul>
             </nav>
 
@@ -182,7 +203,13 @@
                         <span>Disconnect</span>
                     </a>
                 </div>
-                <div class="system-time" id="system-time">--:--:--</div>
+                <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 6px;">
+                    <div class="system-time" id="system-time">--:--:--</div>
+                    <div style="font-size: 0.68rem; font-family: monospace; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
+                        <span>Host Pilot</span>
+                        <span style="color: var(--accent-cyan); font-weight: 600;">{{ app_version }}</span>
+                    </div>
+                </div>
             </div>
         </aside>
 

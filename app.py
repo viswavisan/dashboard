@@ -17,7 +17,23 @@ from flask_sock import Sock
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dashboard-ssh-remote-secret-key-2026')
 
-app.config['TEMPLATES_AUTO_RELOAD'] = True
+def get_git_version():
+    """Retrieve Git commit timestamp in YYYY.MM.DD.HHMM format as application version."""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cmd = ['git', 'log', '-1', '--format=%cd', '--date=format:%Y.%m.%d.%H%M']
+        out = subprocess.check_output(cmd, cwd=base_dir, stderr=subprocess.DEVNULL, timeout=2).decode().strip()
+        if out:
+            return f"v{out}"
+    except Exception:
+        pass
+    return "v2026.10.27.0110"
+
+APP_NAME = "Host Pilot"
+APP_VERSION = get_git_version()
+
+app.config['TEMPLATES_AUTO_RELOAD'] = os.environ.get('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 sock = Sock(app)
 
 # Quiet noisy polling requests in werkzeug logs
@@ -34,11 +50,41 @@ werkzeug_logger.addFilter(WerkzeugFilter())
 _SESSION_KEYS = {}
 
 # ==============================================================================
-# Persistent SSH Client Connection Pool
+# Persistent SSH Client Connection Pool & Resource Eviction
 # ==============================================================================
 # Reuses existing open SSH sessions across requests instead of reconnecting on every call
 _SSH_POOL = {}
 _SSH_POOL_LOCK = threading.Lock()
+_last_cleanup_ts = 0
+
+
+def cleanup_stale_connections():
+    """Periodically evicts idle SSH clients (idle > 30m) and expired session keys to free server memory."""
+    global _last_cleanup_ts
+    now = time.time()
+    if now - _last_cleanup_ts < 300:  # Throttled to at most once per 5 minutes
+        return
+    _last_cleanup_ts = now
+
+    with _SSH_POOL_LOCK:
+        stale_sids = [
+            sid for sid, entry in _SSH_POOL.items()
+            if now - entry.get('last_used', 0) > 1800
+        ]
+        for sid in stale_sids:
+            entry = _SSH_POOL.pop(sid, None)
+            if entry and entry.get('client'):
+                try:
+                    entry['client'].close()
+                except Exception:
+                    pass
+
+    stale_keys = [
+        sid for sid, data in list(_SESSION_KEYS.items())
+        if now - data.get('updated_at', 0) > 14400
+    ]
+    for sid in stale_keys:
+        _SESSION_KEYS.pop(sid, None)
 
 
 def close_pooled_client(session_id):
@@ -92,6 +138,7 @@ def get_active_conn():
 
 @app.before_request
 def require_connection():
+    cleanup_stale_connections()
     allowed_paths = ('/login', '/api/login', '/static/', '/ws/')
     if any(request.path.startswith(p) for p in allowed_paths):
         return None
@@ -130,10 +177,14 @@ def test_ssh_connection(host, username, port, key_path=None, key_content=None, p
         else:
             return False, "No private key provided (neither in-memory content nor file path)."
 
-        client.close()
         return True, "Success"
     except Exception as e:
         return False, str(e)
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def get_ssh_client():
@@ -260,12 +311,14 @@ def run_remote_command(cmd, sudo=False, custom_sudo_password=None):
         except Exception:
             return "", err or "CLI fallback failed", 1
 
+    stdout_ch = None
     try:
         stdin, stdout, stderr = client.exec_command(full_cmd, timeout=15)
+        stdin.close()
+        stdout_ch = getattr(stdout, 'channel', None)
         out = stdout.read().decode('utf-8', errors='replace')
         err_out = stderr.read().decode('utf-8', errors='replace')
         code = stdout.channel.recv_exit_status()
-        # Keep client open in the pool for subsequent requests!
         return out, err_out, code
     except (paramiko.SSHException, socket.error) as e:
         # Remote connection dropped: evict from pool and retry once
@@ -278,6 +331,8 @@ def run_remote_command(cmd, sudo=False, custom_sudo_password=None):
 
         try:
             stdin, stdout, stderr = client.exec_command(full_cmd, timeout=15)
+            stdin.close()
+            stdout_ch = getattr(stdout, 'channel', None)
             out = stdout.read().decode('utf-8', errors='replace')
             err_out = stderr.read().decode('utf-8', errors='replace')
             code = stdout.channel.recv_exit_status()
@@ -286,9 +341,17 @@ def run_remote_command(cmd, sudo=False, custom_sudo_password=None):
             return "", str(retry_e), 1
     except Exception as e:
         return "", str(e), 1
+    finally:
+        if stdout_ch:
+            try:
+                stdout_ch.close()
+            except Exception:
+                pass
 
 
 _hostname_cache = {"val": None, "host": None, "ts": 0}
+_vm_info_cache = {"data": None, "host": None, "ts": 0}
+
 def get_display_hostname():
     """Retrieve remote host's hostname via SSH."""
     conn = get_active_conn()
@@ -305,16 +368,209 @@ def get_display_hostname():
         _hostname_cache["host"] = conn['host']
         _hostname_cache["ts"] = now
         return out.strip()
-    return f"OCI-VM ({conn['host']})"
+    return f"Linux-VM ({conn['host']})"
+
+
+def get_vm_details():
+    """Query remote VM details (Private/Public IPs, Interfaces, OS, Kernel, CPU, Virt) with 120s caching."""
+    conn = get_active_conn()
+    if not conn:
+        return {}
+
+    now = time.time()
+    if _vm_info_cache["data"] and _vm_info_cache["host"] == conn.get('host') and (now - _vm_info_cache["ts"] < 120):
+        return _vm_info_cache["data"]
+
+    py_script = """
+import json, os, platform, socket, subprocess, re
+
+info = {}
+try:
+    info['hostname'] = socket.gethostname()
+except Exception:
+    info['hostname'] = ''
+
+# OS Release
+os_name = 'Linux'
+if os.path.exists('/etc/os-release'):
+    try:
+        with open('/etc/os-release') as f:
+            for line in f:
+                if line.startswith('PRETTY_NAME='):
+                    os_name = line.strip().split('=', 1)[1].strip('\\"\\'')
+                    break
+    except Exception:
+        pass
+info['os_name'] = os_name
+info['kernel'] = platform.release()
+info['arch'] = platform.machine()
+
+# CPU Model
+cpu_model = ''
+try:
+    with open('/proc/cpuinfo') as f:
+        for line in f:
+            if 'model name' in line:
+                cpu_model = line.split(':', 1)[1].strip()
+                break
+except Exception:
+    pass
+info['cpu_model'] = cpu_model or platform.processor()
+
+# Network Interfaces & Private IPs
+interfaces = []
+private_ips = []
+try:
+    out = subprocess.check_output(['ip', '-j', 'addr'], stderr=subprocess.DEVNULL, text=True)
+    for iface in json.loads(out):
+        if_name = iface.get('ifname', '')
+        if if_name == 'lo':
+            continue
+        addrs = []
+        for addr_info in iface.get('addr_info', []):
+            if addr_info.get('family') == 'inet':
+                ip = addr_info.get('local')
+                mask = addr_info.get('prefixlen')
+                addrs.append(f'{ip}/{mask}')
+                if ip and ip not in private_ips and not ip.startswith('127.'):
+                    private_ips.append(ip)
+        if addrs:
+            interfaces.append({
+                'name': if_name,
+                'state': iface.get('operstate', 'UP'),
+                'mac': iface.get('address', ''),
+                'ips': addrs
+            })
+except Exception:
+    try:
+        out = subprocess.check_output(['hostname', '-I'], stderr=subprocess.DEVNULL, text=True)
+        for ip in out.split():
+            if ip not in private_ips and not ip.startswith('127.'):
+                private_ips.append(ip)
+    except Exception:
+        pass
+
+info['interfaces'] = interfaces
+info['private_ips'] = private_ips
+info['primary_private_ip'] = private_ips[0] if private_ips else ''
+
+# Default Gateway
+gateway = ''
+try:
+    out = subprocess.check_output(['ip', 'route', 'show', 'default'], stderr=subprocess.DEVNULL, text=True)
+    parts = out.split()
+    if 'via' in parts:
+        gateway = parts[parts.index('via') + 1]
+except Exception:
+    pass
+info['gateway'] = gateway
+
+# DNS Servers
+dns_servers = []
+try:
+    with open('/etc/resolv.conf') as f:
+        for line in f:
+            if line.startswith('nameserver'):
+                dns = line.split()[1]
+                if dns not in dns_servers:
+                    dns_servers.append(dns)
+except Exception:
+    pass
+info['dns_servers'] = dns_servers
+
+# Virtualization
+virt = ''
+try:
+    virt = subprocess.check_output(['systemd-detect-virt'], stderr=subprocess.DEVNULL, text=True).strip()
+except Exception:
+    pass
+info['virtualization'] = virt or 'Cloud VM'
+
+# Public IP detection (fast OCI metadata check or curl)
+public_ip = ''
+try:
+    out = subprocess.check_output(['curl', '-s', '-m', '1', 'http://169.254.169.254/opc/v1/vnics/'], stderr=subprocess.DEVNULL, text=True)
+    vnic_data = json.loads(out)
+    if isinstance(vnic_data, list) and len(vnic_data) > 0:
+        public_ip = vnic_data[0].get('publicIp', '')
+except Exception:
+    pass
+
+if not public_ip:
+    for service_url in ('https://api.ipify.org', 'https://icanhazip.com', 'https://ifconfig.me/ip'):
+        try:
+            out = subprocess.check_output(['curl', '-s', '-m', '1', service_url], stderr=subprocess.DEVNULL, text=True).strip()
+            if re.match(r'^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$', out):
+                public_ip = out
+                break
+        except Exception:
+            pass
+
+info['public_ip'] = public_ip
+
+print(json.dumps(info))
+"""
+    cmd = f"python3 -c {shlex.quote(py_script)}"
+    stdout, stderr, code = run_remote_command(cmd)
+
+    if code != 0 or not stdout.strip():
+        # Fallback to standard Linux bash commands
+        fb_cmd = "hostname -I 2>/dev/null; echo '___VMDELIM___'; uname -r; echo '___VMDELIM___'; uname -m"
+        fb_out, _, fb_code = run_remote_command(fb_cmd)
+        if fb_code == 0 and fb_out:
+            parts = fb_out.split('___VMDELIM___')
+            priv_ips = parts[0].strip().split() if len(parts) > 0 else []
+            kernel = parts[1].strip() if len(parts) > 1 else ''
+            arch = parts[2].strip() if len(parts) > 2 else ''
+            vm_data = {
+                'hostname': get_display_hostname(),
+                'os_name': 'Linux',
+                'kernel': kernel,
+                'arch': arch,
+                'cpu_model': '',
+                'interfaces': [],
+                'private_ips': priv_ips,
+                'primary_private_ip': priv_ips[0] if priv_ips else '',
+                'gateway': '',
+                'dns_servers': [],
+                'virtualization': 'Cloud VM',
+                'public_ip': conn.get('host', '')
+            }
+            _vm_info_cache["data"] = vm_data
+            _vm_info_cache["host"] = conn.get('host')
+            _vm_info_cache["ts"] = now
+            return vm_data
+        return {}
+
+    try:
+        vm_data = json.loads(stdout.strip())
+        if not vm_data.get('public_ip'):
+            vm_data['public_ip'] = conn.get('host', '')
+        _vm_info_cache["data"] = vm_data
+        _vm_info_cache["host"] = conn.get('host')
+        _vm_info_cache["ts"] = now
+        return vm_data
+    except Exception:
+        return {}
 
 
 @app.context_processor
 def inject_globals():
     conn = get_active_conn() or {}
+    vm = _vm_info_cache.get("data") if (_vm_info_cache.get("host") == conn.get('host')) else {}
+    pub_ip = (vm.get('public_ip') if vm else None) or conn.get('host', '127.0.0.1')
+    priv_ip = (vm.get('primary_private_ip') if vm else None) or ''
+    hname = (vm.get('hostname') if vm else None) or get_display_hostname()
+    login_host = conn.get('host', '')
     return {
-        'system_ip': conn.get('host', '127.0.0.1'),
-        'system_hostname': get_display_hostname(),
-        'system_user': conn.get('username', 'opc')
+        'app_name': APP_NAME,
+        'app_version': APP_VERSION,
+        'login_host': login_host or pub_ip,
+        'system_ip': pub_ip,
+        'system_private_ip': priv_ip,
+        'system_hostname': hname,
+        'system_user': conn.get('username', 'opc'),
+        'system_os': (vm.get('os_name') if vm else None) or 'Linux'
     }
 
 
@@ -468,7 +724,7 @@ def logout():
 # ==============================================================================
 @app.route('/')
 def index():
-    return redirect('/memory')
+    return redirect('/servers')
 
 @app.route('/services')
 def services_view():
@@ -505,6 +761,10 @@ def servers_view():
 @app.route('/files')
 def files_view():
     return render_template('files.html')
+
+@app.route('/users')
+def users_view():
+    return render_template('users.html')
 
 
 # ==============================================================================
@@ -769,10 +1029,23 @@ def get_system_vitals():
                 "used_percent": s_pct
             }
 
+    # Query enriched VM details (Network IPs, interfaces, OS, kernel, arch, CPU model)
+    vm_details = get_vm_details()
+    pub_ip = vm_details.get('public_ip') or host_ip
+    priv_ip = vm_details.get('primary_private_ip') or ''
+    hname = vm_details.get('hostname') or hostname
+
+    login_host = conn.get('host', '')
+
     return {
         "status": "success",
-        "public_ip": host_ip,
-        "hostname": hostname,
+        "app_name": APP_NAME,
+        "app_version": APP_VERSION,
+        "login_host": login_host,
+        "public_ip": pub_ip,
+        "private_ip": priv_ip,
+        "hostname": hname,
+        "vm_details": vm_details,
         "uptime": uptime_str,
         "load_average": loadavg,
         "cpu": {
@@ -793,16 +1066,27 @@ def api_system_info():
 @app.route('/api/servers/active', methods=['GET'])
 def api_active_server():
     conn = get_active_conn() or {}
+    login_host = conn.get('host', '')
+    vm_details = get_vm_details() if login_host else {}
+    pub_ip = vm_details.get('public_ip') or login_host
+    priv_ip = vm_details.get('primary_private_ip') or ''
+    hname = vm_details.get('hostname') or get_display_hostname()
     return jsonify({
         "status": "success",
+        "app_name": APP_NAME,
+        "app_version": APP_VERSION,
         "active": bool(conn),
-        "host": conn.get('host', ''),
+        "login_host": login_host,
+        "host": login_host or pub_ip,
+        "public_ip": pub_ip,
+        "private_ip": priv_ip,
         "username": conn.get('username', ''),
         "port": conn.get('port', 22),
         "key_path": conn.get('key_path', ''),
         "key_name": conn.get('key_name', 'In-Memory Key'),
         "has_in_memory_key": conn.get('has_in_memory_key', False),
-        "hostname": get_display_hostname()
+        "hostname": hname,
+        "vm_details": vm_details
     })
 
 
@@ -1204,6 +1488,420 @@ def api_get_logs(unit):
             "unit": unit,
             "logs": logs_content
         })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ==============================================================================
+# User Account Management API Endpoints
+# ==============================================================================
+@app.route('/api/users', methods=['GET'])
+def api_get_users():
+    """Retrieve all system and standard user accounts, groups, admin status, and lock status."""
+    conn = get_active_conn()
+    if not conn:
+        return jsonify({"status": "error", "message": "No active remote connection."}), 401
+
+    password = request.headers.get('X-Sudo-Password')
+
+    py_script = """
+import sys, os, json, pwd, grp, subprocess
+
+# Detect admin group and members
+sudo_members = set()
+admin_group_found = 'sudo'
+for gname in ('sudo', 'wheel', 'admin'):
+    try:
+        g = grp.getgrnam(gname)
+        sudo_members.update(g.gr_mem)
+        admin_group_found = gname
+    except KeyError:
+        pass
+
+# Lock status from /etc/shadow
+shadow_locked = {}
+try:
+    with open('/etc/shadow', 'r') as f:
+        for line in f:
+            parts = line.strip().split(':')
+            if len(parts) >= 2:
+                p = parts[1]
+                shadow_locked[parts[0]] = p.startswith('!') or p.startswith('*') or p == ''
+except Exception:
+    pass
+
+# Currently logged-in users from `who`
+logged_in = set()
+try:
+    out = subprocess.check_output(['who'], stderr=subprocess.DEVNULL, text=True)
+    for line in out.splitlines():
+        if line.strip():
+            logged_in.add(line.split()[0])
+except Exception:
+    pass
+
+users = []
+for p in pwd.getpwall():
+    # SSH keys count
+    ssh_keys_count = 0
+    ak_path = os.path.join(p.pw_dir, '.ssh', 'authorized_keys')
+    try:
+        if os.path.exists(ak_path):
+            with open(ak_path, 'r', errors='ignore') as akf:
+                ssh_keys_count = len([l for l in akf if l.strip() and not l.strip().startswith('#')])
+    except Exception:
+        pass
+
+    user_groups = []
+    try:
+        user_groups = [g.gr_name for g in grp.getgrall() if p.pw_name in g.gr_mem]
+        p_grp = grp.getgrgid(p.pw_gid).gr_name
+        if p_grp not in user_groups:
+            user_groups.insert(0, p_grp)
+    except Exception:
+        pass
+
+    is_admin = p.pw_name in sudo_members or ('sudo' in user_groups) or ('wheel' in user_groups) or p.pw_uid == 0
+    is_sys = (p.pw_uid < 1000 and p.pw_uid != 0) or p.pw_name == 'nobody'
+
+    users.append({
+        'username': p.pw_name,
+        'uid': p.pw_uid,
+        'gid': p.pw_gid,
+        'fullname': p.pw_gecos.split(',')[0] if p.pw_gecos else '',
+        'home': p.pw_dir,
+        'shell': p.pw_shell,
+        'groups': user_groups,
+        'is_admin': is_admin,
+        'is_locked': shadow_locked.get(p.pw_name, False),
+        'is_system': is_sys,
+        'is_root': p.pw_uid == 0,
+        'is_logged_in': p.pw_name in logged_in,
+        'ssh_keys_count': ssh_keys_count
+    })
+
+print(json.dumps({'users': users, 'admin_group': admin_group_found}))
+"""
+    cmd = f"python3 -c {shlex.quote(py_script)}"
+    # First try sudo if password is provided or passwordless sudo works
+    stdout, stderr, code = run_remote_command(cmd, sudo=True, custom_sudo_password=password)
+
+    # Fallback to non-sudo if sudo auth was required but not given
+    stderr_lower = stderr.lower()
+    if code != 0 and ("incorrect password" in stderr_lower or "password required" in stderr_lower):
+        stdout_nosudo, stderr_nosudo, code_nosudo = run_remote_command(cmd, sudo=False)
+        if code_nosudo == 0:
+            stdout, stderr, code = stdout_nosudo, stderr_nosudo, code_nosudo
+
+    if code != 0 or not stdout.strip():
+        return jsonify({"status": "error", "message": f"Failed to inspect user accounts: {stderr.strip() or stdout.strip()}"}), 500
+
+    try:
+        data = json.loads(stdout.strip())
+        users_list = data.get('users', [])
+        admin_group = data.get('admin_group', 'sudo')
+        current_user = conn.get('username', 'opc')
+
+        def sort_key(u):
+            if u['username'] == current_user:
+                return (0, 0)
+            if u['is_root']:
+                return (1, 0)
+            if not u['is_system']:
+                return (2, u['uid'])
+            return (3, u['uid'])
+
+        users_list.sort(key=sort_key)
+
+        return jsonify({
+            "status": "success",
+            "users": users_list,
+            "current_user": current_user,
+            "admin_group": admin_group
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Failed to parse user accounts: {str(e)}"}), 500
+
+
+@app.route('/api/users/create', methods=['POST'])
+def api_create_user():
+    """Create a new user account on the remote Linux host."""
+    try:
+        data = request.get_json() or {}
+        username = str(data.get('username', '')).strip().lower()
+        fullname = str(data.get('fullname', '')).strip()
+        password = str(data.get('password', '')).strip()
+        shell = str(data.get('shell', '/bin/bash')).strip()
+        is_admin = bool(data.get('is_admin', False))
+        ssh_key = str(data.get('ssh_key', '')).strip()
+
+        if not username or not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', username):
+            return jsonify({"status": "error", "message": "Invalid username. Must start with a letter/underscore and contain up to 32 alphanumeric/hyphen characters."}), 400
+
+        allowed_shells = ('/bin/bash', '/bin/sh', '/bin/zsh', '/usr/sbin/nologin', '/bin/false')
+        if shell not in allowed_shells:
+            shell = '/bin/bash'
+
+        sudo_password = request.headers.get('X-Sudo-Password')
+
+        # Check if user already exists
+        check_out, _, _ = run_remote_command(f"id {shlex.quote(username)}")
+        if check_out.strip():
+            return jsonify({"status": "error", "message": f"User '{username}' already exists."}), 400
+
+        # Build useradd command
+        gecos = shlex.quote(fullname) if fullname else "''"
+        useradd_cmd = f"useradd -m -s {shlex.quote(shell)} -c {gecos} {shlex.quote(username)}"
+        stdout, stderr, code = run_remote_command(useradd_cmd, sudo=True, custom_sudo_password=sudo_password)
+
+        if code != 0:
+            stderr_l = stderr.lower()
+            if "password required" in stderr_l or "incorrect password" in stderr_l:
+                return jsonify({"status": "sudo_auth_required", "message": "Sudo authentication required to create user."}), 401
+            return jsonify({"status": "error", "message": f"Failed to create user: {stderr.strip() or stdout.strip()}"}), 500
+
+        # Set initial password if provided
+        if password:
+            chpwd_cmd = f"echo {shlex.quote(f'{username}:{password}')} | chpasswd"
+            run_remote_command(chpwd_cmd, sudo=True, custom_sudo_password=sudo_password)
+
+        # Grant admin (sudo / wheel) group if selected
+        if is_admin:
+            detect_grp_cmd = "getent group sudo >/dev/null 2>&1 && echo sudo || (getent group wheel >/dev/null 2>&1 && echo wheel || echo admin)"
+            g_out, _, _ = run_remote_command(detect_grp_cmd, sudo=True, custom_sudo_password=sudo_password)
+            target_grp = g_out.strip() or 'sudo'
+            run_remote_command(f"usermod -aG {shlex.quote(target_grp)} {shlex.quote(username)}", sudo=True, custom_sudo_password=sudo_password)
+
+        # Add initial authorized SSH public key if provided
+        if ssh_key:
+            safe_key = ssh_key.replace('\r', '').strip()
+            key_cmd = f"""python3 -c "
+import os, pwd
+u = {repr(username)}
+p = pwd.getpwnam(u)
+ssh_dir = os.path.join(p.pw_dir, '.ssh')
+os.makedirs(ssh_dir, exist_ok=True)
+os.chmod(ssh_dir, 0o700)
+os.chown(ssh_dir, p.pw_uid, p.pw_gid)
+ak_file = os.path.join(ssh_dir, 'authorized_keys')
+with open(ak_file, 'a') as f:
+    f.write({repr(safe_key + chr(10))})
+os.chmod(ak_file, 0o600)
+os.chown(ak_file, p.pw_uid, p.pw_gid)
+" """
+            run_remote_command(key_cmd, sudo=True, custom_sudo_password=sudo_password)
+
+        return jsonify({"status": "success", "message": f"User account '{username}' created successfully."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/users/delete', methods=['POST'])
+def api_delete_user():
+    """Delete a user account, with optional home directory removal."""
+    try:
+        conn = get_active_conn() or {}
+        current_user = conn.get('username')
+
+        data = request.get_json() or {}
+        username = str(data.get('username', '')).strip().lower()
+        remove_home = bool(data.get('remove_home', False))
+
+        if not username or not re.match(r'^[a-z_][a-z0-9_-]{0,31}$', username):
+            return jsonify({"status": "error", "message": "Invalid username."}), 400
+
+        if username == 'root':
+            return jsonify({"status": "error", "message": "Cannot delete the root superuser account."}), 400
+
+        if username == current_user:
+            return jsonify({"status": "error", "message": "Cannot delete the currently connected user session."}), 400
+
+        sudo_password = request.headers.get('X-Sudo-Password')
+        del_flag = "-r" if remove_home else ""
+        cmd = f"userdel {del_flag} {shlex.quote(username)}"
+
+        stdout, stderr, code = run_remote_command(cmd, sudo=True, custom_sudo_password=sudo_password)
+        if code != 0:
+            stderr_l = stderr.lower()
+            if "password required" in stderr_l or "incorrect password" in stderr_l:
+                return jsonify({"status": "sudo_auth_required", "message": "Sudo authentication required to delete user."}), 401
+            return jsonify({"status": "error", "message": stderr.strip() or stdout.strip()}), 500
+
+        return jsonify({"status": "success", "message": f"User '{username}' deleted successfully."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/users/toggle-lock', methods=['POST'])
+def api_toggle_lock():
+    """Lock or unlock a user's login access."""
+    try:
+        conn = get_active_conn() or {}
+        current_user = conn.get('username')
+
+        data = request.get_json() or {}
+        username = str(data.get('username', '')).strip().lower()
+        action = str(data.get('action', '')).strip().lower()
+
+        if action not in ('lock', 'unlock'):
+            return jsonify({"status": "error", "message": "Action must be 'lock' or 'unlock'."}), 400
+
+        if username == 'root' and action == 'lock':
+            return jsonify({"status": "error", "message": "Cannot lock root superuser."}), 400
+
+        if username == current_user and action == 'lock':
+            return jsonify({"status": "error", "message": "Cannot lock the currently active SSH user."}), 400
+
+        sudo_password = request.headers.get('X-Sudo-Password')
+        flag = "-l" if action == 'lock' else "-u"
+        cmd = f"passwd {flag} {shlex.quote(username)}"
+
+        stdout, stderr, code = run_remote_command(cmd, sudo=True, custom_sudo_password=sudo_password)
+        if code != 0:
+            stderr_l = stderr.lower()
+            if "password required" in stderr_l or "incorrect password" in stderr_l:
+                return jsonify({"status": "sudo_auth_required", "message": "Sudo authentication required."}), 401
+            return jsonify({"status": "error", "message": stderr.strip() or stdout.strip()}), 500
+
+        action_word = "locked" if action == 'lock' else "unlocked"
+        return jsonify({"status": "success", "message": f"User '{username}' has been {action_word}."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/users/toggle-admin', methods=['POST'])
+def api_toggle_admin():
+    """Grant or revoke administrator (sudo/wheel) privileges for a user."""
+    try:
+        conn = get_active_conn() or {}
+        current_user = conn.get('username')
+
+        data = request.get_json() or {}
+        username = str(data.get('username', '')).strip().lower()
+        is_admin = bool(data.get('is_admin', False))
+
+        if not username:
+            return jsonify({"status": "error", "message": "Username is required."}), 400
+
+        if username == 'root' and not is_admin:
+            return jsonify({"status": "error", "message": "Cannot revoke admin privileges from root."}), 400
+
+        if username == current_user and not is_admin:
+            return jsonify({"status": "error", "message": "Cannot revoke admin privileges from the currently active session user."}), 400
+
+        sudo_password = request.headers.get('X-Sudo-Password')
+
+        detect_grp_cmd = "getent group sudo >/dev/null 2>&1 && echo sudo || (getent group wheel >/dev/null 2>&1 && echo wheel || echo admin)"
+        g_out, _, _ = run_remote_command(detect_grp_cmd, sudo=True, custom_sudo_password=sudo_password)
+        target_grp = g_out.strip() or 'sudo'
+
+        if is_admin:
+            cmd = f"usermod -aG {shlex.quote(target_grp)} {shlex.quote(username)}"
+        else:
+            cmd = f"gpasswd -d {shlex.quote(username)} {shlex.quote(target_grp)} || deluser {shlex.quote(username)} {shlex.quote(target_grp)}"
+
+        stdout, stderr, code = run_remote_command(cmd, sudo=True, custom_sudo_password=sudo_password)
+        if code != 0:
+            stderr_l = stderr.lower()
+            if "password required" in stderr_l or "incorrect password" in stderr_l:
+                return jsonify({"status": "sudo_auth_required", "message": "Sudo authentication required."}), 401
+            return jsonify({"status": "error", "message": stderr.strip() or stdout.strip()}), 500
+
+        status_msg = f"Granted administrator privileges to '{username}'." if is_admin else f"Revoked administrator privileges from '{username}'."
+        return jsonify({"status": "success", "message": status_msg})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/users/change-password', methods=['POST'])
+def api_change_password():
+    """Reset a user's password and optionally force password change on next login."""
+    try:
+        data = request.get_json() or {}
+        username = str(data.get('username', '')).strip().lower()
+        password = str(data.get('password', '')).strip()
+        force_change = bool(data.get('force_change', False))
+
+        if not username or not password:
+            return jsonify({"status": "error", "message": "Username and new password are required."}), 400
+
+        sudo_password = request.headers.get('X-Sudo-Password')
+        cmd = f"echo {shlex.quote(f'{username}:{password}')} | chpasswd"
+        stdout, stderr, code = run_remote_command(cmd, sudo=True, custom_sudo_password=sudo_password)
+
+        if code != 0:
+            stderr_l = stderr.lower()
+            if "password required" in stderr_l or "incorrect password" in stderr_l:
+                return jsonify({"status": "sudo_auth_required", "message": "Sudo authentication required."}), 401
+            return jsonify({"status": "error", "message": stderr.strip() or stdout.strip()}), 500
+
+        if force_change:
+            run_remote_command(f"chage -d 0 {shlex.quote(username)}", sudo=True, custom_sudo_password=sudo_password)
+
+        return jsonify({"status": "success", "message": f"Password successfully updated for '{username}'."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/users/ssh-keys', methods=['POST'])
+def api_ssh_keys():
+    """Read or update authorized SSH public keys for a specific user."""
+    try:
+        data = request.get_json() or {}
+        username = str(data.get('username', '')).strip().lower()
+        action = str(data.get('action', 'get')).strip()
+        keys_content = str(data.get('keys', ''))
+
+        if not username:
+            return jsonify({"status": "error", "message": "Username is required."}), 400
+
+        sudo_password = request.headers.get('X-Sudo-Password')
+
+        if action == 'get':
+            py_read = f"""python3 -c "
+import os, pwd
+try:
+    p = pwd.getpwnam({repr(username)})
+    ak = os.path.join(p.pw_dir, '.ssh', 'authorized_keys')
+    if os.path.exists(ak):
+        with open(ak, 'r', errors='ignore') as f:
+            print(f.read())
+    else:
+        print('')
+except Exception:
+    print('')
+" """
+            stdout, stderr, code = run_remote_command(py_read, sudo=True, custom_sudo_password=sudo_password)
+            if code != 0 and ("password required" in stderr.lower() or "incorrect password" in stderr.lower()):
+                return jsonify({"status": "sudo_auth_required", "message": "Sudo authentication required."}), 401
+
+            return jsonify({"status": "success", "keys": stdout})
+
+        elif action == 'save':
+            py_save = f"""python3 -c "
+import os, pwd
+u = {repr(username)}
+p = pwd.getpwnam(u)
+ssh_dir = os.path.join(p.pw_dir, '.ssh')
+os.makedirs(ssh_dir, exist_ok=True)
+os.chmod(ssh_dir, 0o700)
+os.chown(ssh_dir, p.pw_uid, p.pw_gid)
+ak_file = os.path.join(ssh_dir, 'authorized_keys')
+with open(ak_file, 'w') as f:
+    f.write({repr(keys_content.replace('\r', ''))})
+os.chmod(ak_file, 0o600)
+os.chown(ak_file, p.pw_uid, p.pw_gid)
+" """
+            stdout, stderr, code = run_remote_command(py_save, sudo=True, custom_sudo_password=sudo_password)
+            if code != 0 and ("password required" in stderr.lower() or "incorrect password" in stderr.lower()):
+                return jsonify({"status": "sudo_auth_required", "message": "Sudo authentication required."}), 401
+
+            if code != 0:
+                return jsonify({"status": "error", "message": stderr.strip() or stdout.strip()}), 500
+
+            return jsonify({"status": "success", "message": f"SSH authorized_keys updated for '{username}'."})
+
+        return jsonify({"status": "error", "message": "Invalid action."}), 400
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

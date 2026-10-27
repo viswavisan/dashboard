@@ -1,6 +1,6 @@
 
 [Unit]
-Description=Dashboard Web App Service
+Description=Host Pilot - Remote Linux Fleet Manager
 After=network.target
 
 [Service]

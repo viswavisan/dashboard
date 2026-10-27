@@ -1,12 +1,20 @@
 {% extends 'base.html' %}
 
-{% block title %}Server List - System Dashboard{% endblock %}
+{% block title %}Server Details - Host Pilot{% endblock %}
 
-{% block page_title %}Server Fleet & Saved Sessions{% endblock %}
-{% block page_desc %}Manage remote servers, view connection profiles, and instantly switch hosts.{% endblock %}
+{% block page_title %}Server Details{% endblock %}
+{% block page_desc %}Live host specifications, cloud instance details, network interfaces, and saved server fleet.{% endblock %}
 
 {% block header_actions %}
 <div class="action-controls">
+    <button id="btn-refresh-server" class="btn btn-secondary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-refresh">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        <span>Refresh</span>
+    </button>
     <button id="btn-add-server" class="btn btn-primary">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -18,27 +26,30 @@
 {% endblock %}
 
 {% block content %}
-<!-- Active Server Status Banner -->
+<!-- Active Server Status Hub -->
 <div class="active-server-card dashboard-card">
     <div class="active-server-header">
-        <div class="active-badge-wrapper">
-            <span class="active-pulse-dot"></span>
-            <span class="active-badge-text">CONNECTED HOST</span>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <div class="active-badge-wrapper">
+                <span class="active-pulse-dot"></span>
+                <span class="active-badge-text">HOST PILOT &bull; CONNECTED HOST</span>
+            </div>
+            <span class="badge badge-success" id="active-os-badge">{{ system_os }}</span>
         </div>
         <div class="active-actions">
-            <a href="/terminal" class="btn btn-secondary btn-sm">
+            <a href="/terminal" class="btn btn-secondary btn-sm" title="Open Interactive Web Terminal">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="4 17 10 11 4 5"></polyline>
                     <line x1="12" y1="19" x2="20" y2="19"></line>
                 </svg>
                 <span>Terminal</span>
             </a>
-            <a href="/memory" class="btn btn-secondary btn-sm">
+            <a href="/memory" class="btn btn-secondary btn-sm" title="View Memory & Resource Utilization">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
                     <rect x="9" y="9" width="6" height="6"></rect>
                 </svg>
-                <span>Vitals</span>
+                <span>Memory</span>
             </a>
             <a href="/logout" class="btn btn-danger-ghost btn-sm" title="Disconnect and return to login">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -55,8 +66,21 @@
         <div class="active-meta-item">
             <span class="meta-label">Public IP</span>
             <div class="ip-copy-group">
-                <span id="active-host-ip" class="meta-value-highlight">{{ system_ip }}</span>
-                <button class="btn-copy-mini" onclick="copyToClipboard('{{ system_ip }}')" title="Copy IP">
+                <span id="active-host-ip" class="meta-value-highlight font-mono">{{ system_ip }}</span>
+                <button class="btn-copy-mini" onclick="copyToClipboard(document.getElementById('active-host-ip').textContent)" title="Copy Public IP">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="active-meta-item">
+            <span class="meta-label">Private IP (Internal)</span>
+            <div class="ip-copy-group">
+                <span id="active-host-private-ip" class="meta-value-highlight font-mono" style="color: var(--accent-emerald);">{{ system_private_ip or 'Detecting...' }}</span>
+                <button class="btn-copy-mini" onclick="copyToClipboard(document.getElementById('active-host-private-ip').textContent)" title="Copy Private IP">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                         <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -72,12 +96,94 @@
 
         <div class="active-meta-item">
             <span class="meta-label">User & Port</span>
-            <span class="meta-value font-mono">{{ system_user }}@{{ system_ip }}:22</span>
+            <span id="active-host-user-port" class="meta-value font-mono">{{ system_user }}@{{ login_host or system_ip }}:22</span>
+        </div>
+    </div>
+</div>
+
+<!-- VM System & Network Specifications Card -->
+<div class="dashboard-card vm-specs-card" style="margin-top: 20px;">
+    <div class="card-header border-bottom">
+        <div class="header-left">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2">
+                    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                    <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                    <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                    <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                </svg>
+                <h3 style="margin: 0; font-size: 1.15rem; font-family: 'Rajdhani', sans-serif; letter-spacing: 0.5px;">VM System & Network Specifications</h3>
+            </div>
+            <span class="badge badge-success" id="vm-os-badge">{{ system_os }}</span>
+        </div>
+        <span class="card-subtitle font-mono" id="vm-virt-badge" style="color: var(--text-muted); font-size: 0.82rem;">Detecting virtualization...</span>
+    </div>
+
+    <div class="vm-specs-grid">
+        <!-- Col 1: System & Compute Specs -->
+        <div class="vm-specs-col">
+            <h4 class="specs-col-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                    <rect x="9" y="9" width="6" height="6"></rect>
+                </svg>
+                Compute & Operating System
+            </h4>
+            <div class="specs-list">
+                <div class="spec-row">
+                    <span class="spec-key">Operating System</span>
+                    <span class="spec-val" id="spec-os" style="font-weight: 600; color: #fff;">{{ system_os }}</span>
+                </div>
+                <div class="spec-row">
+                    <span class="spec-key">Linux Kernel</span>
+                    <span class="spec-val font-mono" id="spec-kernel">Detecting...</span>
+                </div>
+                <div class="spec-row">
+                    <span class="spec-key">Architecture</span>
+                    <span class="spec-val font-mono" id="spec-arch">--</span>
+                </div>
+                <div class="spec-row">
+                    <span class="spec-key">Processor (CPU)</span>
+                    <span class="spec-val font-mono" id="spec-cpu">--</span>
+                </div>
+                <div class="spec-row">
+                    <span class="spec-key">Hypervisor / Cloud</span>
+                    <span class="spec-val" id="spec-virt">--</span>
+                </div>
+            </div>
         </div>
 
-        <div class="active-meta-item">
-            <span class="meta-label">Session Status</span>
-            <span class="status-pill status-online">Active Session</span>
+        <!-- Col 2: Network & Connectivity -->
+        <div class="vm-specs-col">
+            <h4 class="specs-col-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                </svg>
+                Network Interfaces & Routing
+            </h4>
+            <div class="specs-list">
+                <div class="spec-row">
+                    <span class="spec-key">Public IPv4 Address</span>
+                    <span class="spec-val font-mono" id="spec-public-ip" style="color: var(--accent-cyan); font-weight: 600;">{{ system_ip }}</span>
+                </div>
+                <div class="spec-row">
+                    <span class="spec-key">Private IPv4 Address</span>
+                    <span class="spec-val font-mono" id="spec-private-ip" style="color: var(--accent-emerald); font-weight: 600;">{{ system_private_ip or 'Detecting...' }}</span>
+                </div>
+                <div class="spec-row">
+                    <span class="spec-key">Default Gateway</span>
+                    <span class="spec-val font-mono" id="spec-gateway">--</span>
+                </div>
+                <div class="spec-row">
+                    <span class="spec-key">DNS Nameservers</span>
+                    <span class="spec-val font-mono" id="spec-dns">--</span>
+                </div>
+                <div class="spec-row">
+                    <span class="spec-key">Network Interfaces</span>
+                    <div class="spec-val-badges" id="spec-interfaces">Detecting interfaces...</div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -118,7 +224,7 @@
 
             <div class="form-group">
                 <label for="server-name">Profile / Server Name</label>
-                <input type="text" id="server-name" placeholder="e.g. OCI Ampere VM" required>
+                <input type="text" id="server-name" placeholder="e.g. Production OCI VM" required>
             </div>
 
             <div class="form-row-2col">

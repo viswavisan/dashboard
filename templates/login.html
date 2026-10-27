@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SSH Connection - System Dashboard</title>
+    <title>Host Pilot - Connect to Remote Host</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -604,7 +604,10 @@
                     </svg>
                 </div>
                 <div class="login-title-group">
-                    <h1>SSH MONITOR</h1>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <h1>HOST PILOT</h1>
+                        <span style="font-size: 0.68rem; font-family: monospace; background: rgba(0, 240, 255, 0.12); color: var(--accent-cyan); border: 1px solid rgba(0, 240, 255, 0.25); border-radius: 6px; padding: 2px 7px; font-weight: 600;">{{ app_version }}</span>
+                    </div>
                     <p>Connect to remote host</p>
                 </div>
             </div>
@@ -818,6 +821,12 @@
                 </svg>
                 <span id="btn-text">Connect to Host</span>
             </button>
+            <div style="text-align: center; margin-top: 18px; font-size: 0.72rem; color: var(--text-muted); font-family: monospace; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                <span>Host Pilot</span>
+                <span style="color: var(--accent-cyan); font-weight: 600;">{{ app_version }}</span>
+                <span>&bull;</span>
+                <span>Remote Linux Fleet Management</span>
+            </div>
         </form>
     </div>
 
@@ -974,14 +983,16 @@
             const sessions = getStoredSessions() || {};
             sessionSelect.innerHTML = '';
 
-            const defaultOpt = document.createElement('option');
-            defaultOpt.value = '';
-            defaultOpt.textContent = Object.keys(sessions).length > 0 
-                ? '-- Select a saved profile --' 
-                : '-- No saved profiles --';
-            sessionSelect.appendChild(defaultOpt);
-
             const names = Object.keys(sessions);
+            if (names.length === 0) {
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = '';
+                defaultOpt.textContent = '-- No saved profiles --';
+                sessionSelect.appendChild(defaultOpt);
+                sessionSelect.value = '';
+                return;
+            }
+
             names.forEach(name => {
                 const opt = document.createElement('option');
                 opt.value = name;
@@ -989,12 +1000,9 @@
                 sessionSelect.appendChild(opt);
             });
 
-            if (activeName && sessions[activeName]) {
-                sessionSelect.value = activeName;
-                loadSessionIntoForm(sessions[activeName]);
-            } else {
-                sessionSelect.value = '';
-            }
+            const targetName = (activeName && sessions[activeName]) ? activeName : names[0];
+            sessionSelect.value = targetName;
+            loadSessionIntoForm(sessions[targetName]);
         }
 
         function loadSessionIntoForm(sess) {
@@ -1186,7 +1194,7 @@
                 const data = await res.json();
                 if (res.ok && data.status === 'success') {
                     btnText.textContent = 'Connected! Opening...';
-                    window.location.href = '/memory';
+                    window.location.href = '/servers';
                 } else {
                     errBanner.textContent = data.message || 'SSH connection failed. Please verify host, username, and key file.';
                     errBanner.style.display = 'block';
