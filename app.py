@@ -1878,6 +1878,7 @@ except Exception:
             return jsonify({"status": "success", "keys": stdout})
 
         elif action == 'save':
+            clean_keys = keys_content.replace('\r', '')
             py_save = f"""python3 -c "
 import os, pwd
 u = {repr(username)}
@@ -1888,7 +1889,7 @@ os.chmod(ssh_dir, 0o700)
 os.chown(ssh_dir, p.pw_uid, p.pw_gid)
 ak_file = os.path.join(ssh_dir, 'authorized_keys')
 with open(ak_file, 'w') as f:
-    f.write({repr(keys_content.replace('\r', ''))})
+    f.write({repr(clean_keys)})
 os.chmod(ak_file, 0o600)
 os.chown(ak_file, p.pw_uid, p.pw_gid)
 " """
