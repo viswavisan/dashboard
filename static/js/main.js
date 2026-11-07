@@ -1271,6 +1271,11 @@ function initServersControl() {
             }
 
             const sessions = getSavedSessions();
+            if ((!origName && sessions[newName]) || (origName && origName !== newName && sessions[newName])) {
+                if (!confirm(`A profile named "${newName}" already exists. Do you want to overwrite it?`)) {
+                    return;
+                }
+            }
             const existing = (origName && sessions[origName]) ? sessions[origName] : {};
 
             // If renamed, remove old key

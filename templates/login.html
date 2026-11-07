@@ -1085,25 +1085,16 @@
                 alert('Please enter host and user details before saving.');
                 return;
             }
-
-            const currentName = sessionSelect.value;
-            if (!currentName) {
-                openSaveModal();
-                return;
-            }
-
-            const sessions = getStoredSessions() || {};
-            sessions[currentName] = getProfilePayload(currentName);
-            saveStoredSessions(sessions);
-            populateDropdown(currentName);
-            showToast(`Updated "${currentName}"`);
+            openSaveModal();
         });
 
         function openSaveModal() {
             modalInput.value = sessionSelect.value || '';
             saveModal.style.display = 'flex';
-            modalInput.focus();
-            modalInput.select();
+            setTimeout(() => {
+                modalInput.focus();
+                modalInput.select();
+            }, 50);
         }
 
         btnModalCancel.addEventListener('click', () => {
@@ -1114,15 +1105,34 @@
             const name = modalInput.value.trim();
             if (!name) {
                 alert('Please enter a session profile name.');
+                modalInput.focus();
                 return;
             }
 
             const sessions = getStoredSessions() || {};
+            const isExisting = Boolean(sessions[name]);
+
+            if (isExisting) {
+                const confirmMsg = (sessionSelect.value === name)
+                    ? `Update and overwrite saved profile "${name}"?`
+                    : `A profile named "${name}" already exists. Overwrite it?`;
+                if (!confirm(confirmMsg)) {
+                    return;
+                }
+            }
+
             sessions[name] = getProfilePayload(name);
             saveStoredSessions(sessions);
             saveModal.style.display = 'none';
             populateDropdown(name);
-            showToast(`Saved new profile "${name}"`);
+            showToast(isExisting ? `Updated "${name}"` : `Saved new profile "${name}"`);
+        });
+
+        modalInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                btnModalConfirm.click();
+            }
         });
 
         window.addEventListener('keydown', (e) => {
@@ -1133,7 +1143,10 @@
 
         btnDelete.addEventListener('click', () => {
             const currentName = sessionSelect.value;
-            if (!currentName) return;
+            if (!currentName) {
+                alert('No saved profile selected to delete.');
+                return;
+            }
 
             if (confirm(`Delete saved profile "${currentName}"?`)) {
                 const sessions = getStoredSessions() || {};
